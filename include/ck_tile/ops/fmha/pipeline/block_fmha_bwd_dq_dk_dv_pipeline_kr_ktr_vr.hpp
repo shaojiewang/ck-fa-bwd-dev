@@ -156,21 +156,14 @@ struct BlockFmhaBwdDQDKDVPipelineKRKTRVR
                              k_dram_block_window_tmp.get_window_origin(),
                              Policy::template MakeKDramTileDistribution<Problem>());
 
+        Policy::template MakeKDramTileDistribution<Problem>().print();
+
         const auto k_origin = k_dram_window.get_window_origin();
         // Early termination
         const auto [seqlen_q_start, seqlen_q_end] =
             mask.GetTileRangeAlongY(k_origin.at(number<0>{}), number<kM0>{}, number<kN0>{});
 
         const auto num_total_loop = integer_divide_ceil(seqlen_q_end - seqlen_q_start, kM0);
-
-        if(threadIdx.x == 0)
-        {
-            printf("seqlen_q_start=%d, seqlen_q_end=%d, k_dram_window_origin=[%d,%d]\n", 
-                seqlen_q_start,
-                seqlen_q_end,
-                k_dram_window.get_window_origin().at(number<0>{}),
-                k_dram_window.get_window_origin().at(number<1>{}));
-        }
 
         // check early exit if masked and no work to do.
         if constexpr(FmhaMask::IsMasking)
