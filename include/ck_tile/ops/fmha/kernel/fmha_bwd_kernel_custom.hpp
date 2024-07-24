@@ -670,13 +670,85 @@ struct FmhaBwdDQDKDVKernel
         VGradDataType* dv_ptr = reinterpret_cast<VGradDataType*>(kargs.dv_ptr) +
                                 static_cast<long_index_t>(i_nhead) * kargs.nhead_stride_v +
                                 batch_offset_dv;
-        
-        float4 k_reg[4];
-        int k_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.num_head_q * 64;
-        
-        k_reg[0] = *reinterpret_cast<const float4 *>(k_ptr + k_load_offset);
 
-        printf("offset = %d, k_reg = %f\n", k_load_offset, k_reg[0].x);
+        // prepare k and v_t in smem
+        float4 k_reg[4];
+        int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.num_head_q * 64;
+        int kv_reg_offset = kargs.num_head_q * 64 * 32;
+        
+        k_reg[0] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset);
+        k_ptr += kv_reg_offset;
+        k_reg[1] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset);
+        k_ptr += kv_reg_offset;
+        k_reg[2] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset);
+        k_ptr += kv_reg_offset;
+        k_reg[3] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset);
+
+        float4 v_reg[4];
+        
+        v_reg[0] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset);
+        v_ptr += kv_reg_offset;
+        v_reg[1] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset);
+        v_ptr += kv_reg_offset;
+        v_reg[2] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset);
+        v_ptr += kv_reg_offset;
+        v_reg[3] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset);
+
+        char* k_smem = smem_ptr;
+        int kv_smem_offset = threadIdx.x * 16;
+        constexpr kv_smem_reg_offset = 256 * 16;
+        *reinterpret_cast<float4*>(k_smem + kv_smem_offset) = k_reg[0];
+        *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset) = k_reg[1];
+        *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
+        *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 3) = k_reg[3];
+        
+        float4 kt_reg_to_gemm0[4];
+        int wave_id = threadIdx.x / 64;
+        int wave_lane_id = threadIdx.x % 64;
+        int k0_id = wave_lane_id / 32;
+        int n_id = wave_lane_id % 32;
+        int n_wave_repeat_id = wave_id % 4;
+        int k_smem_gemm0_offset = n_wave_repeat_id * (32 * 64 * 2) + n_id * 64 * 2 + k0_id * 16;
+        constexpr int k_smem_read_reg_offset = 32;
+        kt_reg_to_gemm0[0] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset);
+        kt_reg_to_gemm0[1] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
+        kt_reg_to_gemm0[2] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
+        kt_reg_to_gemm0[3] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
+        
+        float2 k_reg_to_gemm4[16];
+        unsigned short k_gemm4[4];
+        int gemm4_n_wave_id = wave_id / 2;
+        int k_smem_gemm4_offset = n_id * 2 + k0_id * 64 * 4 * 2 + gemm4_n_wave_id * 32 * 2;
+        constexpr int k_smem_gemm4_offset_k1 = 64 * 2;
+        constexpr int k_smem_gemm4_offset_reg = 64 * 2 * 8;
+
+#pragma unroll
+        for (int i = 0; i < 16; i++)
+        {
+            k_gemm4[0] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset);
+            k_gemm4[1] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1);
+            k_gemm4[2] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 2);
+            k_gemm4[3] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 3);
+            k_smem_gemm4_offset += k_smem_gemm4_offset_reg;
+            asm volatile("v_pack_b32_f16 %0, %1, %2"
+                         : "=v"(k_reg_to_gemm4[i].x)
+                         : "v"(k_gemm4[0]), "v"(k_gemm4[1]));
+            asm volatile("v_pack_b32_f16 %0, %1, %2"
+                         : "=v"(k_reg_to_gemm4[i].y)
+                         : "v"(k_gemm4[2]), "v"(k_gemm4[3]));
+        }
+
+        char* v_smem = smem_ptr;
+        
+        
+
+
+        if(threadIdx.x == 1)
+        {
+            printf("offset = %d, k_reg = %f\n", k_load_offset, k_reg[0].x);
+        }
+
+        
 
         return;
 

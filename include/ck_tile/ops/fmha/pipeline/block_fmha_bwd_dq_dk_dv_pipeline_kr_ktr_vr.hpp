@@ -156,7 +156,7 @@ struct BlockFmhaBwdDQDKDVPipelineKRKTRVR
                              k_dram_block_window_tmp.get_window_origin(),
                              Policy::template MakeKDramTileDistribution<Problem>());
 
-        Policy::template MakeKDramTileDistribution<Problem>().print();
+        // Policy::template MakeKDramTileDistribution<Problem>().print();
 
         const auto k_origin = k_dram_window.get_window_origin();
         // Early termination
