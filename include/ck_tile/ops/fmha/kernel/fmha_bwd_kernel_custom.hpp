@@ -23,6 +23,8 @@
 
 namespace ck_tile {
 
+#define GCN_MFMA_INSTR __builtin_amdgcn_mfma_f32_32x32x8bf16_1k
+
 template <typename TilePartitioner_,
           typename FmhaPipeline_,
           typename KGradEpiloguePipeline_,
@@ -671,6 +673,15 @@ struct FmhaBwdDQDKDVKernel
                                 static_cast<long_index_t>(i_nhead) * kargs.nhead_stride_v +
                                 batch_offset_dv;
 
+        // vector type
+        using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+        using bfloat16x4 = __attribute__((__vector_size__(4 * sizeof(bhalf_t)))) bhalf_t;
+        typedef struct __BF16x8_t
+        {
+            bfloat16x4 xy[2];
+        } _BF16x8_t;
+        using CVecType = ext_vector_t<float, 16>;
+
         // prepare k and v_t in smem
         float4 k_reg[4];
         int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_k;
@@ -702,7 +713,7 @@ struct FmhaBwdDQDKDVKernel
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 3) = k_reg[3];
         
-        float4 kt_reg_to_gemm0[4];
+        _BF16x8_t kt_reg_to_gemm0[4];
         int wave_id = threadIdx.x / 64;
         int wave_lane_id = threadIdx.x % 64;
         int k0_id = wave_lane_id / 32;
@@ -710,10 +721,10 @@ struct FmhaBwdDQDKDVKernel
         int n_wave_repeat_id = wave_id % 4;
         int k_smem_gemm0_offset = n_wave_repeat_id * (32 * 64 * 2) + n_id * 64 * 2 + k0_id * 16;
         constexpr int k_smem_read_reg_offset = 32;
-        kt_reg_to_gemm0[0] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset);
-        kt_reg_to_gemm0[1] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
-        kt_reg_to_gemm0[2] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
-        kt_reg_to_gemm0[3] = *reinterpret_cast<float4*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
+        kt_reg_to_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset);
+        kt_reg_to_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
+        kt_reg_to_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
+        kt_reg_to_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
         
         float2 k_reg_to_gemm4[16];
         unsigned short k_gemm4[4];
@@ -766,16 +777,10 @@ struct FmhaBwdDQDKDVKernel
         // lds write offset
         
         // lds read offset
-        int q_gemm0_do_gemm2_offset = ;
-        int q_gemm3_do_gemm1_offset = ;
+        int q_gemm0_do_gemm2_offset = n_id * 64 * 2 + k0_id * 16;
+        constexpr int q_gemm0_do_gemm2_reg_offset = 32 * 64 * 2;
+        int q_gemm3_do_gemm1_offset = 0;
 
-        // vector type
-        using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
-        using bfloat16x4 = __attribute__((__vector_size__(4 * sizeof(bhalf_t)))) bhalf_t;
-        typedef struct __BF16x8_t
-        {
-            bfloat16x4 xy[2];
-        } _BF16x8_t;
         // core loop
         do
         {
@@ -799,7 +804,15 @@ struct FmhaBwdDQDKDVKernel
             *reinterpret_cast<float4*>(do_smem + kv_smem_offset) = do_reg[0];
             *reinterpret_cast<float4*>(do_smem + kv_smem_offset + kv_smem_reg_offset) = do_reg[1];
 
+            // gemm 0
             _BF16x8_t q_reg_gemm0[4];
+            CVecType st_acc[2];
+            st_acc[0] = {0};
+            st_acc[1] = {0};
+            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset);
+            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
+
+            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0);
 
 
             i_total_loops += 1;
