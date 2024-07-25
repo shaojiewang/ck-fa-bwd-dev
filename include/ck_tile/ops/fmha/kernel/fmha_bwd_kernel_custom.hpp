@@ -673,8 +673,8 @@ struct FmhaBwdDQDKDVKernel
 
         // prepare k and v_t in smem
         float4 k_reg[4];
-        int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.num_head_q * 64;
-        int kv_reg_offset = kargs.num_head_q * 64 * 32;
+        int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_k;
+        int kv_reg_offset = kargs.stride_k * 32;
         
         k_reg[0] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset);
         k_ptr += kv_reg_offset;
@@ -750,7 +750,61 @@ struct FmhaBwdDQDKDVKernel
         vt_reg_gemm2[2] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
         vt_reg_gemm2[3] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
         
+
+        // prepare core loop
+        constexpr int kM0 = 64;
+        auto seq_q_start = 0;
+        auto seq_q_end = kargs.seqlen_q;
+        index_t i_total_loops = 0;
+        index_t seqlen_q_step = seqlen_q_start;
+        const auto num_total_loop = integer_divide_ceil(seqlen_q_end - seqlen_q_start, kM0);
+
+        // loading offset
+        int q_do_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_q;
+        int q_do_load_reg_offset = kargs.stride_q * 32;
+
+        // lds write offset
         
+        // lds read offset
+        int q_gemm0_do_gemm2_offset = ;
+        int q_gemm3_do_gemm1_offset = ;
+
+        // vector type
+        using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+        using bfloat16x4 = __attribute__((__vector_size__(4 * sizeof(bhalf_t)))) bhalf_t;
+        typedef struct __BF16x8_t
+        {
+            bfloat16x4 xy[2];
+        } _BF16x8_t;
+        // core loop
+        do
+        {
+            // q and do: HBM->reg->lds
+            float4 q_reg[2];
+            q_reg[0] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+            q_ptr += q_do_load_reg_offset;
+            q_reg[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+            q_ptr += q_do_load_reg_offset;
+            float4 do_reg[2];
+            do_reg[0] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
+            do_ptr += q_do_load_reg_offset;
+            do_reg[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+            do_ptr += q_do_load_reg_offset;
+            
+            char* q_smem = smem_ptr;
+            char* do_smem = q_smem + 8192;
+
+            *reinterpret_cast<float4*>(q_smem + kv_smem_offset) = q_reg[0];
+            *reinterpret_cast<float4*>(q_smem + kv_smem_offset + kv_smem_reg_offset) = q_reg[1];
+            *reinterpret_cast<float4*>(do_smem + kv_smem_offset) = do_reg[0];
+            *reinterpret_cast<float4*>(do_smem + kv_smem_offset + kv_smem_reg_offset) = do_reg[1];
+
+            _BF16x8_t q_reg_gemm0[4];
+
+
+            i_total_loops += 1;
+            seqlen_q_step += kM0;
+        } while(i_total_loops < (num_total_loop - 1))
 
 
         if(threadIdx.x == 1)
