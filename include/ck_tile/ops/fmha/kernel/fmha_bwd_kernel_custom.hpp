@@ -696,7 +696,7 @@ struct FmhaBwdDQDKDVKernel
 
         char* k_smem = smem_ptr;
         int kv_smem_offset = threadIdx.x * 16;
-        constexpr kv_smem_reg_offset = 256 * 16;
+        constexpr int kv_smem_reg_offset = 256 * 16;
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset) = k_reg[0];
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset) = k_reg[1];
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
@@ -739,13 +739,23 @@ struct FmhaBwdDQDKDVKernel
         }
 
         char* v_smem = smem_ptr;
+        *reinterpret_cast<float4*>(v_smem + kv_smem_offset) = v_reg[0];
+        *reinterpret_cast<float4*>(v_smem + kv_smem_offset + kv_smem_reg_offset) = v_reg[1];
+        *reinterpret_cast<float4*>(v_smem + kv_smem_offset + kv_smem_reg_offset * 2) = v_reg[2];
+        *reinterpret_cast<float4*>(v_smem + kv_smem_offset + kv_smem_reg_offset * 3) = v_reg[3];
+
+        float4 vt_reg_gemm2[4];
+        vt_reg_gemm2[0] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset);
+        vt_reg_gemm2[1] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
+        vt_reg_gemm2[2] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
+        vt_reg_gemm2[3] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
         
         
 
 
         if(threadIdx.x == 1)
         {
-            printf("offset = %d, k_reg = %f\n", k_load_offset, k_reg[0].x);
+            printf("offset = %d, k_reg = %f\n", kv_load_offset, k_reg[0].x);
         }
 
         
