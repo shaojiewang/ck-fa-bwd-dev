@@ -675,7 +675,7 @@ struct FmhaBwdDQDKDVKernel
 
         // vector type
         using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
-        using bfloat16x4 = __attribute__((__vector_size__(4 * sizeof(bhalf_t)))) bhalf_t;
+        using bfloat16x4 = __attribute__((__vector_size__(4 * sizeof(bf16_t)))) bf16_t;
         typedef struct __BF16x8_t
         {
             bfloat16x4 xy[2];
@@ -764,8 +764,8 @@ struct FmhaBwdDQDKDVKernel
 
         // prepare core loop
         constexpr int kM0 = 64;
-        auto seq_q_start = 0;
-        auto seq_q_end = kargs.seqlen_q;
+        auto seqlen_q_start = 0;
+        auto seqlen_q_end = kargs.seqlen_q;
         index_t i_total_loops = 0;
         index_t seqlen_q_step = seqlen_q_start;
         const auto num_total_loop = integer_divide_ceil(seqlen_q_end - seqlen_q_start, kM0);
@@ -821,7 +821,7 @@ struct FmhaBwdDQDKDVKernel
 
             i_total_loops += 1;
             seqlen_q_step += kM0;
-        } while(i_total_loops < (num_total_loop - 1))
+        } while(i_total_loops < (num_total_loop - 1));
 
 
         if(threadIdx.x == 1)
