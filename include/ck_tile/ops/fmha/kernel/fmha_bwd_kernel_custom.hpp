@@ -804,6 +804,8 @@ struct FmhaBwdDQDKDVKernel
             *reinterpret_cast<float4*>(do_smem + kv_smem_offset) = do_reg[0];
             *reinterpret_cast<float4*>(do_smem + kv_smem_offset + kv_smem_reg_offset) = do_reg[1];
 
+            __syncthreads();
+
             // gemm 0
             _BF16x8_t q_reg_gemm0[4];
             CVecType st_acc[2];
@@ -813,7 +815,9 @@ struct FmhaBwdDQDKDVKernel
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
 
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0);
-
+            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0);
 
             i_total_loops += 1;
             seqlen_q_step += kM0;
