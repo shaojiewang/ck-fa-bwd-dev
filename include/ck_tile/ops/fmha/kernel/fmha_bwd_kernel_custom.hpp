@@ -780,7 +780,9 @@ struct FmhaBwdDQDKDVKernel
         int q_gemm0_do_gemm2_offset = n_id * 64 * 2 + k0_id * 16;
         constexpr int q_gemm0_do_gemm2_reg_offset = 32 * 64 * 2;
         constexpr int q_gemm0_do_gemm2_gemmk_offset = 16 * 2;
-        int q_gemm3_do_gemm1_offset = ;
+        int q_gemm3_do_gemm1_offset = n_id * 4 + k0_id * 64 * 4 * 2;
+        constexpr int q_gemm3_do_gemm1_reg_offset = 64 * 2;
+        constexpr int q_gemm3_do_gemm1_gemmk_offset = 64 * 8 * 2;
 
         // lse and d hbm offset and lds write read offset
         constexpr int lse_d_step_offset = 64 * sizeof(float);
@@ -912,10 +914,16 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1][15] = exp2(scale * st_acc[1][15] - lse_softmax[1][3]);
 
             // gemm1
-            
+            bfloatx4 pt_reg_gemm1;
+            pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[0][0]);
+            pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[0][1]);
+            pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[0][2]);
+            pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[0][3]);
             
 
-            
+            float2 do_reg_gemm1;
+            do_reg_gemm1.x = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
+            do_reg_gemm1.y = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
 
             i_total_loops += 1;
             // seqlen_q_step += kM0;
