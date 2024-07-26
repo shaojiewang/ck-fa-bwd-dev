@@ -674,7 +674,7 @@ struct FmhaBwdDQDKDVKernel
                                 batch_offset_dv;
 
         // vector type
-        using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+        // using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
         using bfloat16x4 = __attribute__((__vector_size__(4 * sizeof(bf16_t)))) bf16_t;
         typedef struct __BF16x8_t
         {
@@ -767,7 +767,7 @@ struct FmhaBwdDQDKDVKernel
         auto seqlen_q_start = 0;
         auto seqlen_q_end = kargs.seqlen_q;
         index_t i_total_loops = 0;
-        index_t seqlen_q_step = seqlen_q_start;
+        // index_t seqlen_q_step = seqlen_q_start;
         const auto num_total_loop = integer_divide_ceil(seqlen_q_end - seqlen_q_start, kM0);
 
         // loading offset
@@ -779,7 +779,8 @@ struct FmhaBwdDQDKDVKernel
         // lds read offset
         int q_gemm0_do_gemm2_offset = n_id * 64 * 2 + k0_id * 16;
         constexpr int q_gemm0_do_gemm2_reg_offset = 32 * 64 * 2;
-        int q_gemm3_do_gemm1_offset = 0;
+        constexpr int q_gemm0_do_gemm2_gemmk_offset = 16 * 2;
+        // int q_gemm3_do_gemm1_offset = 0;
 
         // core loop
         do
@@ -813,14 +814,22 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1] = {0};
             q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset);
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
+            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
+            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
 
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[1], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[1], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[0], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[0], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[1], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[1], 0, 0, 0);
+
+            
 
             i_total_loops += 1;
-            seqlen_q_step += kM0;
+            // seqlen_q_step += kM0;
         } while(i_total_loops < (num_total_loop - 1));
 
 
