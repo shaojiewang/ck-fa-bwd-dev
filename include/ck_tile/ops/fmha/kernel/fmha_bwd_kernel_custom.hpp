@@ -674,7 +674,7 @@ struct FmhaBwdDQDKDVKernel
                                 batch_offset_dv;
 
         // vector type
-        // using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+        using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
         using bfloat16x4 = __attribute__((__vector_size__(4 * sizeof(bf16_t)))) bf16_t;
         typedef struct __BF16x8_t
         {
@@ -780,16 +780,18 @@ struct FmhaBwdDQDKDVKernel
         int q_gemm0_do_gemm2_offset = n_id * 64 * 2 + k0_id * 16;
         constexpr int q_gemm0_do_gemm2_reg_offset = 32 * 64 * 2;
         constexpr int q_gemm0_do_gemm2_gemmk_offset = 16 * 2;
-        // int q_gemm3_do_gemm1_offset = 0;
+        int q_gemm3_do_gemm1_offset = ;
 
         // lse and d hbm offset and lds write read offset
         constexpr int lse_d_step_offset = 64 * sizeof(float);
-        constexpr int lse_d_reg_offset = 32 * sizeof(float);
+        constexpr int lse_d_reg_offset = 8 * sizeof(float);
         int lse_d_hbm_offset = threadIdx.x * sizeof(float);
         int lse_d_lds_write_offset = threadIdx.x * sizeof(float);
         int lse_d_lds_read_offset = k0_id * 4 * sizeof(float);
         float* lse_raw = lse_ptr + seqlen_q_start;
         float* d_raw = d_ptr + seqlen_q_start;
+
+        auto scale = kargs.scale;
         
         // core loop
         do
@@ -801,7 +803,7 @@ struct FmhaBwdDQDKDVKernel
             char* d_smem = lse_smem + 256;
             if (threadIdx.x < 64)
             {
-                *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = lse_reg;
+                *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
             }
 
             // q and do: HBM->reg->lds
@@ -860,7 +862,57 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[1], 0, 0, 0);
 
             // softmax
-            float4 lse_softmax;
+            floatx4 lse_softmax[2];
+            lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
+            lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset);
+
+            st_acc[0][0] = exp2(scale * st_acc[0][0] - lse_softmax[0][0]);
+            st_acc[0][1] = exp2(scale * st_acc[0][1] - lse_softmax[0][1]);
+            st_acc[0][2] = exp2(scale * st_acc[0][2] - lse_softmax[0][2]);
+            st_acc[0][3] = exp2(scale * st_acc[0][3] - lse_softmax[0][3]);
+            st_acc[0][4] = exp2(scale * st_acc[0][4] - lse_softmax[1][0]);
+            st_acc[0][5] = exp2(scale * st_acc[0][5] - lse_softmax[1][1]);
+            st_acc[0][6] = exp2(scale * st_acc[0][6] - lse_softmax[1][2]);
+            st_acc[0][7] = exp2(scale * st_acc[0][7] - lse_softmax[1][3]);
+
+            lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 2);
+            lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 3);
+
+            st_acc[0][8]  = exp2(scale * st_acc[0][8]  - lse_softmax[0][0]);
+            st_acc[0][9]  = exp2(scale * st_acc[0][9]  - lse_softmax[0][1]);
+            st_acc[0][10] = exp2(scale * st_acc[0][10] - lse_softmax[0][2]);
+            st_acc[0][11] = exp2(scale * st_acc[0][11] - lse_softmax[0][3]);
+            st_acc[0][12] = exp2(scale * st_acc[0][12] - lse_softmax[1][0]);
+            st_acc[0][13] = exp2(scale * st_acc[0][13] - lse_softmax[1][1]);
+            st_acc[0][14] = exp2(scale * st_acc[0][14] - lse_softmax[1][2]);
+            st_acc[0][15] = exp2(scale * st_acc[0][15] - lse_softmax[1][3]);
+
+            lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 4);
+            lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 5);
+
+            st_acc[1][0] = exp2(scale * st_acc[0][0] - lse_softmax[0][0]);
+            st_acc[1][1] = exp2(scale * st_acc[0][1] - lse_softmax[0][1]);
+            st_acc[1][2] = exp2(scale * st_acc[0][2] - lse_softmax[0][2]);
+            st_acc[1][3] = exp2(scale * st_acc[0][3] - lse_softmax[0][3]);
+            st_acc[1][4] = exp2(scale * st_acc[0][4] - lse_softmax[1][0]);
+            st_acc[1][5] = exp2(scale * st_acc[0][5] - lse_softmax[1][1]);
+            st_acc[1][6] = exp2(scale * st_acc[0][6] - lse_softmax[1][2]);
+            st_acc[1][7] = exp2(scale * st_acc[0][7] - lse_softmax[1][3]);
+
+            lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 6);
+            lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 7);
+
+            st_acc[1][8]  = exp2(scale * st_acc[1][8]  - lse_softmax[0][0]);
+            st_acc[1][9]  = exp2(scale * st_acc[1][9]  - lse_softmax[0][1]);
+            st_acc[1][10] = exp2(scale * st_acc[1][10] - lse_softmax[0][2]);
+            st_acc[1][11] = exp2(scale * st_acc[1][11] - lse_softmax[0][3]);
+            st_acc[1][12] = exp2(scale * st_acc[1][12] - lse_softmax[1][0]);
+            st_acc[1][13] = exp2(scale * st_acc[1][13] - lse_softmax[1][1]);
+            st_acc[1][14] = exp2(scale * st_acc[1][14] - lse_softmax[1][2]);
+            st_acc[1][15] = exp2(scale * st_acc[1][15] - lse_softmax[1][3]);
+
+            // gemm1
+            
             
 
             
