@@ -682,6 +682,10 @@ struct FmhaBwdDQDKDVKernel
         } _BF16x8_t;
         using CVecType = ext_vector_t<float, 16>;
 
+        // imm number
+        constexpr int32_t m0 = 0x05040100;
+        constexpr int32_t m1 = 0x07060302;
+
         // prepare k and v_t in smem
         float4 k_reg[4];
         int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_k;
@@ -921,9 +925,20 @@ struct FmhaBwdDQDKDVKernel
             pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[0][3]);
             
 
-            float2 do_reg_gemm1;
-            do_reg_gemm1.x = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
-            do_reg_gemm1.y = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
+            floatx4 do_reg_gemm1;
+            do_reg_gemm1[0] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
+            do_reg_gemm1[1] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset);
+            do_reg_gemm1[2] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2);
+            do_reg_gemm1[3] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3);
+
+            uint2 do_reg_transpose_gemm1;
+            do_reg_transpose_gemm1.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1[1]), bit_cast<uint32_t>(do_reg_gemm1[0]), m0);
+            do_reg_transpose_gemm1.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1[3]), bit_cast<uint32_t>(do_reg_gemm1[2]), m0);
+           
+            bfloat16x4 do_reg_gemm1 = bit_cast<bfloat16x4>(do_reg_transpose_gemm1);
+            
+            CVecType dv_acc[2];
+            dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1, dv_acc[0], 0, 0, 0);
 
             i_total_loops += 1;
             // seqlen_q_step += kM0;
