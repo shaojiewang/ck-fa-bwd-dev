@@ -1027,6 +1027,40 @@ struct FmhaBwdDQDKDVKernel
             dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
             dv_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
             
+            do_smem += q_gemm3_do_gemm1_gemmk_offset
+            do_reg_gemm1[0] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_gemmk_offset * 4);
+            do_reg_gemm1[1] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset + q_gemm3_do_gemm1_gemmk_offset * 4);
+            do_reg_gemm1[2] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2 + q_gemm3_do_gemm1_gemmk_offset * 4);
+            do_reg_gemm1[3] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3 + q_gemm3_do_gemm1_gemmk_offset * 4);
+
+            pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[1][0 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[1][1 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[1][2 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[1][3 + st_acc_gemmk_offset]);
+
+            do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+            do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
+            
+            dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
+            dv_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
+            
+            do_smem += q_gemm3_do_gemm1_gemmk_offset
+            do_reg_gemm1[0] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_gemmk_offset * 4);
+            do_reg_gemm1[1] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset + q_gemm3_do_gemm1_gemmk_offset * 4);
+            do_reg_gemm1[2] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2 + q_gemm3_do_gemm1_gemmk_offset * 4);
+            do_reg_gemm1[3] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3 + q_gemm3_do_gemm1_gemmk_offset * 4);
+
+            pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[1][0 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[1][1 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[1][2 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[1][3 + st_acc_gemmk_offset]);
+
+            do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+            do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
+            
+            dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
+            dv_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
+            
             
 
             i_total_loops += 1;
@@ -1039,7 +1073,8 @@ struct FmhaBwdDQDKDVKernel
             printf("offset = %d, k_reg = %f\n", kv_load_offset, k_reg[0].x);
         }
 
-        
+        // write out dv
+
 
         return;
 
