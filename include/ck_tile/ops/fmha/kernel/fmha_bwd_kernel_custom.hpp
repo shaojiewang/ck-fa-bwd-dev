@@ -1074,7 +1074,15 @@ struct FmhaBwdDQDKDVKernel
         }
 
         // write out dv
-
+        const int& stride_v_seq = args.stride_v;
+        int dv_hbm_offset = n_id * 2 + k0_id * stride_v_seq;
+        const int dv_hbm_reg_offset = stride_v_seq;
+        const int dv_hbm_a_group_offset = stride_v_seq * 8;
+        const int wave_offset_gemm1_gemm3 = wave_id * 32 * stride_v_seq;
+        dv_hbm_offset += wave_offset_gemm1_gemm3;
+        uint32_t dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][0]), bit_cast<uint32_t>(dv_acc[0][0]), m1);
+        *reinterpret_cast<uint32_t*>(dv_ptr + dv_hbm_offset) = dv_pack;
+        
 
         return;
 
