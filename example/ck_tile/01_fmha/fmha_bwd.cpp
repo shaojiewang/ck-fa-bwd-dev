@@ -620,6 +620,13 @@ bool run(const ck_tile::ArgParser& arg_parser)
             ck_tile::identity{},
             ck_tile::identity{},
             ck_tile::scales(scale)); // s_g_m_n = scale * q_g_m_k@k_g_n_k
+        
+        for(int i_s = 0; i_s < 4; i_s++)
+        {
+            printf("s_host_ref=%f\n", 
+                *(s_host_ref.data() + (i_s + 32) * 128));
+        }
+
 
         if(bias.type == bias_enum::elementwise_bias)
         {
