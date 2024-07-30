@@ -823,6 +823,10 @@ struct FmhaBwdDQDKDVKernel
                 *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
             }
 
+            //printf("thread:[%d], lse_d_hbm_offset=%d\n", type_convert<int>(threadIdx.x), lse_d_hbm_offset);
+            //printf("thread:[%d], lse_d_lds_write_offset=%d\n", type_convert<int>(threadIdx.x), lse_d_lds_write_offset);
+            printf("thread:[%d], lse_reg=%f\n", type_convert<int>(threadIdx.x), lse_reg);
+
             // q and do: HBM->reg->lds
             float4 q_reg[2];
             q_reg[0] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
@@ -895,10 +899,30 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[1], 0, 0, 0);
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[1], 0, 0, 0);
 
+            if(threadIdx.x == 0)
+            {
+                printf("before softmax: st acc[0]=[%f, %f, %f, %f]\n",
+                    st_acc[0][0], 
+                    st_acc[0][1],
+                    st_acc[0][2],
+                    st_acc[0][3]);
+            }
+
             // softmax
             floatx4 lse_softmax[2];
             lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
             lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset);
+
+            if(threadIdx.x == 0)
+            {
+                printf("thread:[%d], before softmax: lse[0]=[%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    lse_softmax[0][0], 
+                    lse_softmax[0][1],
+                    lse_softmax[0][2],
+                    lse_softmax[0][3]);
+            }
+
 
             st_acc[0][0] = exp2(scale * st_acc[0][0] - lse_softmax[0][0]);
             st_acc[0][1] = exp2(scale * st_acc[0][1] - lse_softmax[0][1]);
@@ -944,6 +968,15 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1][13] = exp2(scale * st_acc[1][13] - lse_softmax[1][1]);
             st_acc[1][14] = exp2(scale * st_acc[1][14] - lse_softmax[1][2]);
             st_acc[1][15] = exp2(scale * st_acc[1][15] - lse_softmax[1][3]);
+
+            if(threadIdx.x == 0)
+            {
+                printf("st acc[0]=[%f, %f, %f, %f]\n",
+                    st_acc[0][0], 
+                    st_acc[0][1],
+                    st_acc[0][2],
+                    st_acc[0][3]);
+            }
 
             // gemm1
             bfloat16x4 pt_reg_gemm1;

@@ -312,11 +312,20 @@ bool run(const ck_tile::ArgParser& arg_parser)
 
     if(init_method == 0)
     {
+#if 0
         ck_tile::FillUniformDistributionIntegerValue<QDataType>{-2.f, 2.f, seed}(q_host);
         ck_tile::FillUniformDistributionIntegerValue<KDataType>{-2.f, 2.f, seed}(k_host);
         ck_tile::FillUniformDistributionIntegerValue<VDataType>{-2.f, 2.f, seed}(v_host);
         ck_tile::FillUniformDistributionIntegerValue<BiasDataType>{-2.f, 2.f, seed}(bias_host);
         ck_tile::FillUniformDistributionIntegerValue<OGradDataType>{-2.f, 2.f, seed}(do_host);
+#else
+        ck_tile::FillUniformDistributionIntegerValue<QDataType>{1.f, 1.f, seed}(q_host);
+        ck_tile::FillUniformDistributionIntegerValue<KDataType>{1.f, 1.f, seed}(k_host);
+        ck_tile::FillUniformDistributionIntegerValue<VDataType>{1.f, 1.f, seed}(v_host);
+        ck_tile::FillUniformDistributionIntegerValue<BiasDataType>{1.f, 1.f, seed}(bias_host);
+        ck_tile::FillUniformDistributionIntegerValue<OGradDataType>{1.f, 1.f, seed}(do_host);
+
+#endif
     }
     else if(init_method == 1)
     {
