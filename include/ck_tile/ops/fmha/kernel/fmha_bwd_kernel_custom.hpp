@@ -1086,16 +1086,19 @@ struct FmhaBwdDQDKDVKernel
 
             do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
             do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
-            
-            printf("thread=%d, q_gemm3_do_gemm1_offset=%d, q_gemm3_do_gemm1_reg_offset=%d, q_gemm3_do_gemm1_gemmk_offset=%d, do_reg_gemm1[1]=[%f, %f, %f, %f]\n",
-                type_convert<int>(threadIdx.x),
-                q_gemm3_do_gemm1_offset,
-                q_gemm3_do_gemm1_reg_offset,
-                q_gemm3_do_gemm1_gemmk_offset,
-                type_convert<float>(do_reg_gemm1[1][0]),
-                type_convert<float>(do_reg_gemm1[1][1]),
-                type_convert<float>(do_reg_gemm1[1][2]),
-                type_convert<float>(do_reg_gemm1[1][3]));
+           
+            if (threadIdx.x == 0)
+            { 
+                printf("thread=%d, q_gemm3_do_gemm1_offset=%d, q_gemm3_do_gemm1_reg_offset=%d, q_gemm3_do_gemm1_gemmk_offset=%d, do_reg_gemm1[1]=[%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    q_gemm3_do_gemm1_offset,
+                    q_gemm3_do_gemm1_reg_offset,
+                    q_gemm3_do_gemm1_gemmk_offset,
+                    type_convert<float>(do_reg_gemm1[1][0]),
+                    type_convert<float>(do_reg_gemm1[1][1]),
+                    type_convert<float>(do_reg_gemm1[1][2]),
+                    type_convert<float>(do_reg_gemm1[1][3]));
+            }
            
             dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
             dv_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
