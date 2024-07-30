@@ -797,7 +797,7 @@ struct FmhaBwdDQDKDVKernel
         // lse and d hbm offset and lds write read offset
         // constexpr int lse_d_step_offset = 64 * sizeof(float);
         constexpr int lse_d_reg_offset = 8 * sizeof(float);
-        int lse_d_hbm_offset = threadIdx.x * sizeof(float);
+        int lse_d_hbm_offset = threadIdx.x;
         int lse_d_lds_write_offset = threadIdx.x * sizeof(float);
         int lse_d_lds_read_offset = k0_id * 4 * sizeof(float);
         const float* lse_raw = lse_ptr + seqlen_q_start;
@@ -816,6 +816,7 @@ struct FmhaBwdDQDKDVKernel
             // lse and d: HBM->reg->lds
             float lse_reg;
             lse_reg = threadIdx.x < 64 ? lse_raw[lse_d_hbm_offset] : 0;
+            lse_raw += 64;
             char* lse_smem = smem_ptr;
             char* d_smem = lse_smem + 256;
             if (threadIdx.x < 64)
@@ -825,7 +826,7 @@ struct FmhaBwdDQDKDVKernel
 
             //printf("thread:[%d], lse_d_hbm_offset=%d\n", type_convert<int>(threadIdx.x), lse_d_hbm_offset);
             //printf("thread:[%d], lse_d_lds_write_offset=%d\n", type_convert<int>(threadIdx.x), lse_d_lds_write_offset);
-            printf("thread:[%d], lse_reg=%f\n", type_convert<int>(threadIdx.x), lse_reg);
+            //printf("thread:[%d], lse_reg=%f\n", type_convert<int>(threadIdx.x), lse_reg);
 
             // q and do: HBM->reg->lds
             float4 q_reg[2];
@@ -901,27 +902,17 @@ struct FmhaBwdDQDKDVKernel
 
             if(threadIdx.x == 0)
             {
-                printf("before softmax: st acc[0]=[%f, %f, %f, %f]\n",
-                    st_acc[0][0], 
-                    st_acc[0][1],
-                    st_acc[0][2],
-                    st_acc[0][3]);
+                printf("before softmax: st acc[1]=[%f, %f, %f, %f]\n",
+                    st_acc[1][0], 
+                    st_acc[1][1],
+                    st_acc[1][2],
+                    st_acc[1][3]);
             }
 
             // softmax
             floatx4 lse_softmax[2];
             lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
             lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset);
-
-            if(threadIdx.x == 0)
-            {
-                printf("thread:[%d], before softmax: lse[0]=[%f, %f, %f, %f]\n",
-                    type_convert<int>(threadIdx.x),
-                    lse_softmax[0][0], 
-                    lse_softmax[0][1],
-                    lse_softmax[0][2],
-                    lse_softmax[0][3]);
-            }
 
 
             st_acc[0][0] = exp2(scale * st_acc[0][0] - lse_softmax[0][0]);
@@ -948,17 +939,27 @@ struct FmhaBwdDQDKDVKernel
             lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 4);
             lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 5);
 
-            st_acc[1][0] = exp2(scale * st_acc[0][0] - lse_softmax[0][0]);
-            st_acc[1][1] = exp2(scale * st_acc[0][1] - lse_softmax[0][1]);
-            st_acc[1][2] = exp2(scale * st_acc[0][2] - lse_softmax[0][2]);
-            st_acc[1][3] = exp2(scale * st_acc[0][3] - lse_softmax[0][3]);
-            st_acc[1][4] = exp2(scale * st_acc[0][4] - lse_softmax[1][0]);
-            st_acc[1][5] = exp2(scale * st_acc[0][5] - lse_softmax[1][1]);
-            st_acc[1][6] = exp2(scale * st_acc[0][6] - lse_softmax[1][2]);
-            st_acc[1][7] = exp2(scale * st_acc[0][7] - lse_softmax[1][3]);
+            st_acc[1][0] = exp2(scale * st_acc[1][0] - lse_softmax[0][0]);
+            st_acc[1][1] = exp2(scale * st_acc[1][1] - lse_softmax[0][1]);
+            st_acc[1][2] = exp2(scale * st_acc[1][2] - lse_softmax[0][2]);
+            st_acc[1][3] = exp2(scale * st_acc[1][3] - lse_softmax[0][3]);
+            st_acc[1][4] = exp2(scale * st_acc[1][4] - lse_softmax[1][0]);
+            st_acc[1][5] = exp2(scale * st_acc[1][5] - lse_softmax[1][1]);
+            st_acc[1][6] = exp2(scale * st_acc[1][6] - lse_softmax[1][2]);
+            st_acc[1][7] = exp2(scale * st_acc[1][7] - lse_softmax[1][3]);
 
             lse_softmax[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 6);
             lse_softmax[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 7);
+
+            if(threadIdx.x == 0)
+            {
+                printf("thread:[%d], before softmax: lse[0]=[%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    lse_softmax[0][0], 
+                    lse_softmax[0][1],
+                    lse_softmax[0][2],
+                    lse_softmax[0][3]);
+            }
 
             st_acc[1][8]  = exp2(scale * st_acc[1][8]  - lse_softmax[0][0]);
             st_acc[1][9]  = exp2(scale * st_acc[1][9]  - lse_softmax[0][1]);
@@ -971,11 +972,11 @@ struct FmhaBwdDQDKDVKernel
 
             if(threadIdx.x == 0)
             {
-                printf("st acc[0]=[%f, %f, %f, %f]\n",
-                    st_acc[0][0], 
-                    st_acc[0][1],
-                    st_acc[0][2],
-                    st_acc[0][3]);
+                printf("st acc[1]=[%f, %f, %f, %f]\n",
+                    st_acc[1][0], 
+                    st_acc[1][1],
+                    st_acc[1][2],
+                    st_acc[1][3]);
             }
 
             // gemm1
@@ -1089,6 +1090,22 @@ struct FmhaBwdDQDKDVKernel
             dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
             dv_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
             
+            if(threadIdx.x == 0)
+            {
+                printf("dv acc[0]=[%f, %f, %f, %f]\n",
+                    dv_acc[0][0], 
+                    dv_acc[0][1],
+                    dv_acc[0][2],
+                    dv_acc[0][3]);
+                printf("do_reg_gemm1[0]=[%f, %f, %f, %f]\n",
+                    type_convert<float>(do_reg_gemm1[0][0]),
+                    type_convert<float>(do_reg_gemm1[0][1]),
+                    type_convert<float>(do_reg_gemm1[0][2]),
+                    type_convert<float>(do_reg_gemm1[0][3]));
+                printf("q_gemm3_do_gemm1_gemmk_offset*4=%d\n", 
+                    q_gemm3_do_gemm1_gemmk_offset * 4);
+            }
+
             do_smem += q_gemm3_do_gemm1_gemmk_offset;
             do_reg_gemm1_tmp[0] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_gemmk_offset * 4);
             do_reg_gemm1_tmp[1] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset + q_gemm3_do_gemm1_gemmk_offset * 4);
@@ -1159,7 +1176,7 @@ struct FmhaBwdDQDKDVKernel
 
             i_total_loops += 1;
             // seqlen_q_step += kM0;
-        } while(i_total_loops < (num_total_loop - 1));
+        } while(i_total_loops < (num_total_loop - 0));
 
 
         // if(threadIdx.x == 1)
@@ -1169,7 +1186,16 @@ struct FmhaBwdDQDKDVKernel
 
         // write out dv
         const int& stride_v_seq = kargs.stride_v;
-        int dv_hbm_offset = n_id * 2 + k0_id * stride_v_seq;
+        int dv_hbm_offset = n_id * 2 + k0_id * stride_v_seq * 4;
+
+        if(threadIdx.x == 0)
+        {
+            printf("thread=%d, stride_v_seq=%d, dv_hbm_offset=%d\n",
+                type_convert<int>(threadIdx.x),
+                stride_v_seq,
+                dv_hbm_offset);
+        }
+
         // const int dv_hbm_reg_offset = stride_v_seq;
         // const int dv_hbm_a_group_offset = stride_v_seq * 8;
         const int wave_offset_gemm1_gemm3 = wave_id * 32 * stride_v_seq;

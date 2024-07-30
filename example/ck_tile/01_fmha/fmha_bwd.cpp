@@ -765,6 +765,11 @@ bool run(const ck_tile::ArgParser& arg_parser)
         }
     }
 
+    for(int i_lse = 0; i_lse < 64; i_lse++)
+    {
+        printf("lse = [%f]\n", *reinterpret_cast<float*>(lse_host.data() + i_lse));
+    }
+
     o_buf.ToDevice(o_host.data());
     lse_buf.ToDevice(lse_host.data());
     dq_buf.SetZero();
