@@ -1007,13 +1007,13 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1][14] = exp2(scale * st_acc[1][14] - lse_softmax[1][2]);
             st_acc[1][15] = exp2(scale * st_acc[1][15] - lse_softmax[1][3]);
 
-            if(threadIdx.x == 0)
+            if(threadIdx.x == 1)
             {
-                printf("after softmax st acc[1][12~15]=[%f, %f, %f, %f]\n",
-                    st_acc[1][12], 
-                    st_acc[1][13],
-                    st_acc[1][14],
-                    st_acc[1][15]);
+                printf("after softmax st acc[0][0~3]=[%f, %f, %f, %f]\n",
+                    st_acc[0][0], 
+                    st_acc[0][1],
+                    st_acc[0][2],
+                    st_acc[0][3]);
             }
 
             // gemm1
