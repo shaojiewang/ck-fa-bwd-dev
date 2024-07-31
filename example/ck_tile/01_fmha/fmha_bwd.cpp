@@ -626,7 +626,16 @@ bool run(const ck_tile::ArgParser& arg_parser)
             for(int j_s = 0; j_s < 4; j_s++)
             {
                 printf("s_host_ref=%f\n", 
-                    *(s_host_ref.data() + (32 + i_s * 8 + j_s) * 128) / scale);
+                    *(s_host_ref.data() + (32 + i_s * 8 + j_s) * 128 + 1) / scale);
+            }
+        }
+
+        for(int i_s = 0; i_s < 4; i_s++)
+        {
+            for(int j_s = 0; j_s < 4; j_s++)
+            {
+                printf("64 : s_host_ref=%f\n", 
+                    *(s_host_ref.data() + (64 + 32 + i_s * 8 + j_s) * 128 + 1) / scale);
             }
         }
 
@@ -775,10 +784,16 @@ bool run(const ck_tile::ArgParser& arg_parser)
         }
     }
 
-    for(int i_lse = 0; i_lse < 64; i_lse++)
+    for(int i_lse = 0; i_lse < 128; i_lse++)
     {
-        printf("lse = [%f]\n", *reinterpret_cast<float*>(lse_host.data() + i_lse));
+        printf("%d th, lse = [%f]\n", i_lse, *reinterpret_cast<float*>(lse_host.data() + i_lse));
     }
+
+    for(int i_p = 0; i_p < 2; i_p++)
+    {
+        printf("");
+    }
+
 
     o_buf.ToDevice(o_host.data());
     lse_buf.ToDevice(lse_host.data());
