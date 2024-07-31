@@ -716,7 +716,9 @@ struct FmhaBwdDQDKDVKernel
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset) = k_reg[1];
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
         *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 3) = k_reg[3];
-        
+       
+        __syncthreads();
+ 
         _BF16x8_t kt_reg_to_gemm0[4];
         int wave_id = threadIdx.x / 64;
         int wave_lane_id = threadIdx.x % 64;
@@ -986,10 +988,10 @@ struct FmhaBwdDQDKDVKernel
             {
                 printf("thread:[%d], before softmax: lse[1]=[%f, %f, %f, %f]\n",
                     type_convert<int>(threadIdx.x),
-                    lse_softmax[1][0], 
-                    lse_softmax[1][1],
-                    lse_softmax[1][2],
-                    lse_softmax[1][3]);
+                    lse_softmax[1][0] / log2e_v<LSEDataType>, 
+                    lse_softmax[1][1] / log2e_v<LSEDataType>,
+                    lse_softmax[1][2] / log2e_v<LSEDataType>,
+                    lse_softmax[1][3] / log2e_v<LSEDataType>);
             }
 
             st_acc[1][8]  = exp2(scale * st_acc[1][8]  - lse_softmax[0][0]);
@@ -1258,9 +1260,25 @@ struct FmhaBwdDQDKDVKernel
         // const int dv_hbm_a_group_offset = stride_v_seq * 8;
         const int wave_offset_gemm1_gemm3 = wave_id * 32 * stride_v_seq;
         dv_hbm_offset += wave_offset_gemm1_gemm3;
-        uint32_t dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][0]), bit_cast<uint32_t>(dv_acc[0][0]), m1);
-        char* dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset);
-        *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+        const int reg_offset_gemm1_gemm3 = stride_v_seq;
+        const int group_offset_gemm1_gemm3 = stride_v_seq * 8;
+
+#pragma unroll
+        for (int i_dv = 0; i_dv < 4; i_dv++)
+        {
+            uint32_t dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4]), m1);
+            char* dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv);
+            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+            dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 1]), m1);
+            dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3);
+            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+            dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 2]), m1);
+            dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2);
+            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+            dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 3]), m1);
+            dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3);
+            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+        }
         
 
         return;
