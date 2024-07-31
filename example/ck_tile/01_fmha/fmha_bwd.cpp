@@ -623,8 +623,11 @@ bool run(const ck_tile::ArgParser& arg_parser)
         
         for(int i_s = 0; i_s < 4; i_s++)
         {
-            printf("s_host_ref=%f\n", 
-                *(s_host_ref.data() + (i_s + 32) * 128));
+            for(int j_s = 0; j_s < 4; j_s++)
+            {
+                printf("s_host_ref=%f\n", 
+                    *(s_host_ref.data() + (32 + i_s * 8 + j_s) * 128) / scale);
+            }
         }
 
 
