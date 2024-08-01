@@ -765,11 +765,11 @@ struct FmhaBwdDQDKDVKernel
 
         __syncthreads();
 
-        float4 vt_reg_gemm2[4];
-        vt_reg_gemm2[0] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset);
-        vt_reg_gemm2[1] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
-        vt_reg_gemm2[2] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
-        vt_reg_gemm2[3] = *reinterpret_cast<float4*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
+        _BF16x8_t vt_reg_gemm2[4];
+        vt_reg_gemm2[0] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset);
+        vt_reg_gemm2[1] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
+        vt_reg_gemm2[2] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
+        vt_reg_gemm2[3] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
         
         __syncthreads();
 
@@ -975,7 +975,38 @@ struct FmhaBwdDQDKDVKernel
             do_smem -= q_gemm3_do_gemm1_gemmk_offset * 8;
 
             // gemm 2
+            CVecType dpt_acc[2];
+            dpt_acc[0] = {0};
+            dpt_acc[1] = {0};
+            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset);
+            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
+            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
+            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
 
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[1], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[1], 0, 0, 0);
+
+            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
+            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
+            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
+            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
+
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[1], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[1], 0, 0, 0);
+
+            // ds
 
 
             __syncthreads();
