@@ -143,8 +143,8 @@ check_err(const Range& out,
             }
             res = false;
         }
-        std::cerr << msg << std::setw(12) << std::setprecision(7) << " out[" << i
-                  << "] != ref[" << i << "]: " << o << " != " << r << std::endl;
+        // std::cerr << msg << std::setw(12) << std::setprecision(7) << " out[" << i
+        //           << "] != ref[" << i << "]: " << o << " != " << r << std::endl;
     }
     if(!res)
     {

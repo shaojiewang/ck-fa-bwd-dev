@@ -621,46 +621,6 @@ bool run(const ck_tile::ArgParser& arg_parser)
             ck_tile::identity{},
             ck_tile::scales(scale)); // s_g_m_n = scale * q_g_m_k@k_g_n_k
        
-        for(int i_s = 40; i_s < 64; i_s++)
-        {
-            printf("%dth, st[0~3]=[%f, %f, %f, %f]\n",
-                i_s,
-                *(s_host_ref.data() + i_s + 128 * 4) / scale,
-                *(s_host_ref.data() + i_s + 128 * 5) / scale,
-                *(s_host_ref.data() + i_s + 128 * 6) / scale,
-                *(s_host_ref.data() + i_s + 128 * 7) / scale);
-        }
-
-        for(int i_s = 40; i_s < 64; i_s++)
-        {
-            printf("%dth, st[4~7]=[%f, %f, %f, %f]\n",
-                i_s,
-                *(s_host_ref.data() + i_s + 128 * 12) / scale,
-                *(s_host_ref.data() + i_s + 128 * 13) / scale,
-                *(s_host_ref.data() + i_s + 128 * 14) / scale,
-                *(s_host_ref.data() + i_s + 128 * 15) / scale);
-        }
- 
-        for(int i_s = 40; i_s < 64; i_s++)
-        {
-            printf("%dth, st[8~11]=[%f, %f, %f, %f]\n",
-                i_s,
-                *(s_host_ref.data() + i_s + 128 * 20) / scale,
-                *(s_host_ref.data() + i_s + 128 * 21) / scale,
-                *(s_host_ref.data() + i_s + 128 * 22) / scale,
-                *(s_host_ref.data() + i_s + 128 * 23) / scale);
-        }
-
-        for(int i_s = 40; i_s < 64; i_s++)
-        {
-            printf("%dth, st[12~15]=[%f, %f, %f, %f]\n",
-                i_s,
-                *(s_host_ref.data() + i_s + 128 * 28) / scale,
-                *(s_host_ref.data() + i_s + 128 * 29) / scale,
-                *(s_host_ref.data() + i_s + 128 * 30) / scale,
-                *(s_host_ref.data() + i_s + 128 * 31) / scale);
-        }
-
         if(bias.type == bias_enum::elementwise_bias)
         {
             // elementwise bias
@@ -793,24 +753,6 @@ bool run(const ck_tile::ArgParser& arg_parser)
         lse_host_ref.ForEach([&](auto& self, auto idx) { lse_host(wb, idx[0], idx[1]) = self(idx); });
         // clang-format on
 
-        for(int i_p = 40; i_p < 64; i_p++)
-        {
-            printf("%d th, lp=[%f, %f, %f, %f]\n", 
-                i_p,
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 36)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 37)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 38)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 39)));
-        }
-        for(int i_p = 40; i_p < 64; i_p++)
-        {
-            printf("%d th, lp=[%f, %f, %f, %f]\n", 
-                i_p,
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 100)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 101)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 102)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 103)));
-        }
         q_host_refs.push_back(q_host_ref);
         k_host_refs.push_back(k_host_ref);
         v_host_refs.push_back(v_host_ref);
@@ -822,13 +764,6 @@ bool run(const ck_tile::ArgParser& arg_parser)
             randval_host_refs.push_back(randval_host_ref);
         }
     }
-
-    for(int i_lse = 0; i_lse < 128; i_lse++)
-    {
-        printf("%d th, lse = [%f]\n", i_lse, *reinterpret_cast<float*>(lse_host.data() + i_lse));
-    }
-
-
 
     o_buf.ToDevice(o_host.data());
     lse_buf.ToDevice(lse_host.data());
