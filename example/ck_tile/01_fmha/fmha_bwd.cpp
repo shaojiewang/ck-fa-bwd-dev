@@ -323,7 +323,7 @@ bool run(const ck_tile::ArgParser& arg_parser)
         ck_tile::FillUniformDistributionIntegerValue<KDataType>{-1.f, 1.f, seed}(k_host);
         ck_tile::FillUniformDistributionIntegerValue<VDataType>{1.f, 1.f, seed}(v_host);
         ck_tile::FillUniformDistributionIntegerValue<BiasDataType>{1.f, 1.f, seed}(bias_host);
-        ck_tile::FillUniformDistributionIntegerValue<OGradDataType>{1.f, 1.f, seed}(do_host);
+        ck_tile::FillUniformDistributionIntegerValue<OGradDataType>{-1.f, 1.f, seed}(do_host);
 
 #endif
     }
