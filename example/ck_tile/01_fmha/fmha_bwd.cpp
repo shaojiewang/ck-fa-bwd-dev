@@ -623,27 +623,43 @@ bool run(const ck_tile::ArgParser& arg_parser)
        
         for(int i_s = 40; i_s < 64; i_s++)
         {
-            printf("%dth, st=[%f, %f, %f, %f]\n",);
+            printf("%dth, st[0~3]=[%f, %f, %f, %f]\n",
+                i_s,
+                *(s_host_ref.data() + i_s + 128 * 4) / scale,
+                *(s_host_ref.data() + i_s + 128 * 5) / scale,
+                *(s_host_ref.data() + i_s + 128 * 6) / scale,
+                *(s_host_ref.data() + i_s + 128 * 7) / scale);
+        }
+
+        for(int i_s = 40; i_s < 64; i_s++)
+        {
+            printf("%dth, st[4~7]=[%f, %f, %f, %f]\n",
+                i_s,
+                *(s_host_ref.data() + i_s + 128 * 12) / scale,
+                *(s_host_ref.data() + i_s + 128 * 13) / scale,
+                *(s_host_ref.data() + i_s + 128 * 14) / scale,
+                *(s_host_ref.data() + i_s + 128 * 15) / scale);
         }
  
-        for(int i_s = 0; i_s < 4; i_s++)
+        for(int i_s = 40; i_s < 64; i_s++)
         {
-            for(int j_s = 0; j_s < 4; j_s++)
-            {
-                printf("s_host_ref=%f\n", 
-                    *(s_host_ref.data() + (32 + i_s * 8 + j_s) * 128 + 1) / scale);
-            }
+            printf("%dth, st[8~11]=[%f, %f, %f, %f]\n",
+                i_s,
+                *(s_host_ref.data() + i_s + 128 * 20) / scale,
+                *(s_host_ref.data() + i_s + 128 * 21) / scale,
+                *(s_host_ref.data() + i_s + 128 * 22) / scale,
+                *(s_host_ref.data() + i_s + 128 * 23) / scale);
         }
 
-        for(int i_s = 0; i_s < 4; i_s++)
+        for(int i_s = 40; i_s < 64; i_s++)
         {
-            for(int j_s = 0; j_s < 4; j_s++)
-            {
-                printf("64 : s_host_ref=%f\n", 
-                    *(s_host_ref.data() + (64 + 32 + i_s * 8 + j_s) * 128 + 1) / scale);
-            }
+            printf("%dth, st[12~15]=[%f, %f, %f, %f]\n",
+                i_s,
+                *(s_host_ref.data() + i_s + 128 * 28) / scale,
+                *(s_host_ref.data() + i_s + 128 * 29) / scale,
+                *(s_host_ref.data() + i_s + 128 * 30) / scale,
+                *(s_host_ref.data() + i_s + 128 * 31) / scale);
         }
-
 
         if(bias.type == bias_enum::elementwise_bias)
         {
@@ -779,23 +795,21 @@ bool run(const ck_tile::ArgParser& arg_parser)
 
         for(int i_p = 40; i_p < 64; i_p++)
         {
-            printf("%d th, hp=%f, lp=[%f, %f, %f, %f]\n", 
+            printf("%d th, lp=[%f, %f, %f, %f]\n", 
                 i_p,
-                *reinterpret_cast<float*>(p_hp_host_ref.data() + i_p),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 4)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 5)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 6)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 7)));
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 36)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 37)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 38)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 39)));
         }
         for(int i_p = 40; i_p < 64; i_p++)
         {
-            printf("%d th, hp=%f, lp=[%f, %f, %f, %f]\n", 
+            printf("%d th, lp=[%f, %f, %f, %f]\n", 
                 i_p,
-                *reinterpret_cast<float*>(p_hp_host_ref.data() + i_p + 72 * 128),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 68 * 128)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 69 * 128)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 70 * 128)),
-                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 71 * 128)));
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 100)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 101)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 102)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 103)));
         }
         q_host_refs.push_back(q_host_ref);
         k_host_refs.push_back(k_host_ref);

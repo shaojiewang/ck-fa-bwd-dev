@@ -920,26 +920,30 @@ struct FmhaBwdDQDKDVKernel
 
             if(threadIdx.x < 128 && threadIdx.x >= 104)
             {
-                printf("before softmax st acc[1][0~3]=[%f, %f, %f, %f]\n",
-                    st_acc[1][0], 
-                    st_acc[1][1],
-                    st_acc[1][2],
-                    st_acc[1][3]);
-                printf("before softmax st acc[1][4~7]=[%f, %f, %f, %f]\n",
-                    st_acc[1][4], 
-                    st_acc[1][5],
-                    st_acc[1][6],
-                    st_acc[1][7]);
-                printf("before softmax st acc[1][8~11]=[%f, %f, %f, %f]\n",
-                    st_acc[1][8], 
-                    st_acc[1][9],
-                    st_acc[1][10],
-                    st_acc[1][11]);
-                printf("before softmax st acc[1][12~15]=[%f, %f, %f, %f]\n",
-                    st_acc[1][12], 
-                    st_acc[1][13],
-                    st_acc[1][14],
-                    st_acc[1][15]);
+                printf("%dth, before softmax st acc[0][0~3]=[%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    st_acc[0][0], 
+                    st_acc[0][1],
+                    st_acc[0][2],
+                    st_acc[0][3]);
+                printf("%dth, before softmax st acc[0][4~7]=[%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    st_acc[0][4], 
+                    st_acc[0][5],
+                    st_acc[0][6],
+                    st_acc[0][7]);
+                printf("%dth, before softmax st acc[0][8~11]=[%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    st_acc[0][8], 
+                    st_acc[0][9],
+                    st_acc[0][10],
+                    st_acc[0][11]);
+                printf("%dth, before softmax st acc[0][12~15]=[%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    st_acc[0][12], 
+                    st_acc[0][13],
+                    st_acc[0][14],
+                    st_acc[0][15]);
             }
 
             // softmax
@@ -1058,16 +1062,6 @@ struct FmhaBwdDQDKDVKernel
             pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[0][6]);
             pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[0][7]);
 
-
-            if(threadIdx.x < 128 && threadIdx.x >= 104)
-            {
-                printf("thread=%d, pt [0]=[%f, %f, %f, %f]\n",
-                    type_convert<int>(threadIdx.x),
-                    type_convert<float>(pt_reg_gemm1[0]), 
-                    type_convert<float>(pt_reg_gemm1[1]),
-                    type_convert<float>(pt_reg_gemm1[2]),
-                    type_convert<float>(pt_reg_gemm1[3]));
-            }
 
             do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
             do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
@@ -1188,10 +1182,10 @@ struct FmhaBwdDQDKDVKernel
             do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m1);
             do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m1);
             
-            pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[1][0 + st_acc_gemmk_offset]);
-            pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[1][1 + st_acc_gemmk_offset]);
-            pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[1][2 + st_acc_gemmk_offset]);
-            pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[1][3 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[1][0 + st_acc_gemmk_offset * 2]);
+            pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[1][1 + st_acc_gemmk_offset * 2]);
+            pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[1][2 + st_acc_gemmk_offset * 2]);
+            pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[1][3 + st_acc_gemmk_offset * 2]);
 
             do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
             do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
@@ -1210,10 +1204,10 @@ struct FmhaBwdDQDKDVKernel
             do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m1);
             do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m1);
             
-            pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[1][0 + st_acc_gemmk_offset]);
-            pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[1][1 + st_acc_gemmk_offset]);
-            pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[1][2 + st_acc_gemmk_offset]);
-            pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[1][3 + st_acc_gemmk_offset]);
+            pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[1][0 + st_acc_gemmk_offset * 3]);
+            pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[1][1 + st_acc_gemmk_offset * 3]);
+            pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[1][2 + st_acc_gemmk_offset * 3]);
+            pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[1][3 + st_acc_gemmk_offset * 3]);
 
             do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
             do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
