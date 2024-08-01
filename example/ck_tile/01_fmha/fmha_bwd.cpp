@@ -319,11 +319,11 @@ bool run(const ck_tile::ArgParser& arg_parser)
         ck_tile::FillUniformDistributionIntegerValue<BiasDataType>{-2.f, 2.f, seed}(bias_host);
         ck_tile::FillUniformDistributionIntegerValue<OGradDataType>{-2.f, 2.f, seed}(do_host);
 #else
-        ck_tile::FillUniformDistributionIntegerValue<QDataType>{0.f, 1.f, seed}(q_host);
-        ck_tile::FillUniformDistributionIntegerValue<KDataType>{0.f, 1.f, seed}(k_host);
+        ck_tile::FillUniformDistributionIntegerValue<QDataType>{-1.f, 1.f, seed}(q_host);
+        ck_tile::FillUniformDistributionIntegerValue<KDataType>{-1.f, 1.f, seed}(k_host);
         ck_tile::FillUniformDistributionIntegerValue<VDataType>{1.f, 1.f, seed}(v_host);
         ck_tile::FillUniformDistributionIntegerValue<BiasDataType>{1.f, 1.f, seed}(bias_host);
-        ck_tile::FillUniformDistributionIntegerValue<OGradDataType>{0.f, 1.f, seed}(do_host);
+        ck_tile::FillUniformDistributionIntegerValue<OGradDataType>{1.f, 1.f, seed}(do_host);
 
 #endif
     }
@@ -620,7 +620,12 @@ bool run(const ck_tile::ArgParser& arg_parser)
             ck_tile::identity{},
             ck_tile::identity{},
             ck_tile::scales(scale)); // s_g_m_n = scale * q_g_m_k@k_g_n_k
-        
+       
+        for(int i_s = 40; i_s < 64; i_s++)
+        {
+            printf("%dth, st=[%f, %f, %f, %f]\n",);
+        }
+ 
         for(int i_s = 0; i_s < 4; i_s++)
         {
             for(int j_s = 0; j_s < 4; j_s++)
@@ -772,11 +777,25 @@ bool run(const ck_tile::ArgParser& arg_parser)
         lse_host_ref.ForEach([&](auto& self, auto idx) { lse_host(wb, idx[0], idx[1]) = self(idx); });
         // clang-format on
 
-        for(int i_p = 0; i_p < 2; i_p++)
+        for(int i_p = 40; i_p < 64; i_p++)
         {
-            printf("%d th, lp=%f\n", 
+            printf("%d th, hp=%f, lp=[%f, %f, %f, %f]\n", 
                 i_p,
-                *reinterpret_cast<float*>(p_hp_host_ref.data() + i_p));
+                *reinterpret_cast<float*>(p_hp_host_ref.data() + i_p),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 4)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 5)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 6)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 128 * 7)));
+        }
+        for(int i_p = 40; i_p < 64; i_p++)
+        {
+            printf("%d th, hp=%f, lp=[%f, %f, %f, %f]\n", 
+                i_p,
+                *reinterpret_cast<float*>(p_hp_host_ref.data() + i_p + 72 * 128),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 68 * 128)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 69 * 128)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 70 * 128)),
+                ck_tile::type_convert<float>(*(p_lp_host_ref.data() + i_p + 71 * 128)));
         }
         q_host_refs.push_back(q_host_ref);
         k_host_refs.push_back(k_host_ref);
