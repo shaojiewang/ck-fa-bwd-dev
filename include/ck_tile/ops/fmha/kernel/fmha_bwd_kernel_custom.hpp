@@ -1036,46 +1036,6 @@ struct FmhaBwdDQDKDVKernel
                 }    
             }
 
-            if(threadIdx.x == 0 || threadIdx.x == 32)
-            {
-                printf("thread=%d, dpt_acc[0]=[%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f]\n",
-                    type_convert<int>(threadIdx.x),
-                    dpt_acc[0][0],
-                    dpt_acc[0][1],
-                    dpt_acc[0][2],
-                    dpt_acc[0][3],
-                    dpt_acc[0][4],
-                    dpt_acc[0][5],
-                    dpt_acc[0][6],
-                    dpt_acc[0][7],
-                    dpt_acc[0][8],
-                    dpt_acc[0][9],
-                    dpt_acc[0][10],
-                    dpt_acc[0][11],
-                    dpt_acc[0][12],
-                    dpt_acc[0][13],
-                    dpt_acc[0][14],
-                    dpt_acc[0][15]);
-                printf("thread=%d, dpt_acc[1]=[%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f]\n",
-                    type_convert<int>(threadIdx.x),
-                    dpt_acc[1][0],
-                    dpt_acc[1][1],
-                    dpt_acc[1][2],
-                    dpt_acc[1][3],
-                    dpt_acc[1][4],
-                    dpt_acc[1][5],
-                    dpt_acc[1][6],
-                    dpt_acc[1][7],
-                    dpt_acc[1][8],
-                    dpt_acc[1][9],
-                    dpt_acc[1][10],
-                    dpt_acc[1][11],
-                    dpt_acc[1][12],
-                    dpt_acc[1][13],
-                    dpt_acc[1][14],
-                    dpt_acc[1][15]);
-            }
-
             // gemm 3
 #pragma unroll
             for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < 2; i_st_acc_reg_k++)
