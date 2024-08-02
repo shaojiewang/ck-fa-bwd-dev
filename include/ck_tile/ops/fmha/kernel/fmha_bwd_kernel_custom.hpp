@@ -786,7 +786,13 @@ struct FmhaBwdDQDKDVKernel
         int q_do_load_reg_offset = kargs.stride_q * 32;
 
         constexpr int st_acc_gemmk_offset = 4;
+        
         // lds write offset
+        // gemm4 ds offset
+        const int ds_lds_write_offset = n_id * 2 + k0_id * 128 * 2 + n_wave_repeat_id * 32 * 2;
+        constexpr int ds_lds_write_reg_offset = 128 * 2;
+        constexpr int ds_lds_gemm_m_group_offset = 128 * 8 * 2;
+        
         
         // lds read offset
         int q_gemm0_do_gemm2_offset = n_id * 64 * 2 + k0_id * 16;
@@ -795,6 +801,11 @@ struct FmhaBwdDQDKDVKernel
         int q_gemm3_do_gemm1_offset = n_id * 4 + k0_id * 64 * 4 * 2;
         constexpr int q_gemm3_do_gemm1_reg_offset = 64 * 2;
         constexpr int q_gemm3_do_gemm1_gemmk_offset = 64 * 8 * 2;
+
+        // gemm4 ds offset
+        const int ds_gemm4_offset = n_id * 128 * 2 + k0_id * 4 * 2;
+        const int ds_gemm4_m_wave_offset = (wave_id % 2) * 32 * 128 * 2;
+        constexpr int ds_gemm4_kiter_offset = 8 * 2;
 
         // lse and d hbm offset and lds write read offset
         // constexpr int lse_d_step_offset = 64 * sizeof(float);
