@@ -803,7 +803,7 @@ struct FmhaBwdDQDKDVKernel
         int lse_d_lds_write_offset = threadIdx.x * sizeof(float);
         int lse_d_lds_read_offset = k0_id * 4 * sizeof(float);
         const float* lse_raw = lse_ptr + seqlen_q_start;
-        // float* d_raw = d_ptr + seqlen_q_start;
+        const float* d_raw = d_ptr + seqlen_q_start;
 
         auto scale = kargs.scale;
 
@@ -820,14 +820,17 @@ struct FmhaBwdDQDKDVKernel
         do
         {
             // lse and d: HBM->reg->lds
-            float lse_reg;
+            float lse_reg, d_reg;
             lse_reg = threadIdx.x < 64 ? lse_raw[lse_d_hbm_offset] : 0;
             lse_raw += 64;
+            d_reg = threadIdx.x < 64 ? d_raw[lse_d_hbm_offset] : 0;
+            d_raw += 64;
             char* lse_smem = smem_ptr;
             char* d_smem = lse_smem + 256;
             if (threadIdx.x < 64)
             {
                 *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
+                *reinterpret_cast<float*>(d_smem + lse_d_lds_write_offset) = d_reg;
             }
 
             //printf("thread:[%d], lse_d_hbm_offset=%d\n", type_convert<int>(threadIdx.x), lse_d_hbm_offset);
@@ -1033,6 +1036,46 @@ struct FmhaBwdDQDKDVKernel
                 }    
             }
 
+            if(threadIdx.x == 0 || threadIdx.x == 32)
+            {
+                printf("thread=%d, dpt_acc[0]=[%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    dpt_acc[0][0],
+                    dpt_acc[0][1],
+                    dpt_acc[0][2],
+                    dpt_acc[0][3],
+                    dpt_acc[0][4],
+                    dpt_acc[0][5],
+                    dpt_acc[0][6],
+                    dpt_acc[0][7],
+                    dpt_acc[0][8],
+                    dpt_acc[0][9],
+                    dpt_acc[0][10],
+                    dpt_acc[0][11],
+                    dpt_acc[0][12],
+                    dpt_acc[0][13],
+                    dpt_acc[0][14],
+                    dpt_acc[0][15]);
+                printf("thread=%d, dpt_acc[1]=[%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f], [%f, %f, %f, %f]\n",
+                    type_convert<int>(threadIdx.x),
+                    dpt_acc[1][0],
+                    dpt_acc[1][1],
+                    dpt_acc[1][2],
+                    dpt_acc[1][3],
+                    dpt_acc[1][4],
+                    dpt_acc[1][5],
+                    dpt_acc[1][6],
+                    dpt_acc[1][7],
+                    dpt_acc[1][8],
+                    dpt_acc[1][9],
+                    dpt_acc[1][10],
+                    dpt_acc[1][11],
+                    dpt_acc[1][12],
+                    dpt_acc[1][13],
+                    dpt_acc[1][14],
+                    dpt_acc[1][15]);
+            }
+
             // gemm 3
 #pragma unroll
             for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < 2; i_st_acc_reg_k++)
@@ -1101,6 +1144,10 @@ struct FmhaBwdDQDKDVKernel
             dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3);
             *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
         }
+
+        // dk = dk * scale
+        dk_acc[0] *= kargs.raw_scale;
+        dk_acc[1] *= kargs.raw_scale;
         
         dk_ptr += i_n0 * kargs.stride_k;
 #pragma unroll
