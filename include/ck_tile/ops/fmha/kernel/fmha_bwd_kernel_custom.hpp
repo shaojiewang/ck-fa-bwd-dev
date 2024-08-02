@@ -789,8 +789,8 @@ struct FmhaBwdDQDKDVKernel
         
         // lds write offset
         // gemm4 ds offset
-        const int ds_lds_write_offset = n_id * 2 + k0_id * 128 * 2 + n_wave_repeat_id * 32 * 2;
-        constexpr int ds_lds_write_reg_offset = 128 * 2;
+        const int ds_lds_write_offset = n_id * 4 + k0_id * 128 * 8 + n_wave_repeat_id * 32 * 4;
+        constexpr int ds_lds_write_reg_offset = 128 * 4;
         constexpr int ds_lds_gemm_m_group_offset = 128 * 8 * 2;
         
         
@@ -803,9 +803,9 @@ struct FmhaBwdDQDKDVKernel
         constexpr int q_gemm3_do_gemm1_gemmk_offset = 64 * 8 * 2;
 
         // gemm4 ds offset
-        const int ds_gemm4_offset = n_id * 128 * 2 + k0_id * 4 * 2;
-        const int ds_gemm4_m_wave_offset = (wave_id % 2) * 32 * 128 * 2;
-        constexpr int ds_gemm4_kiter_offset = 8 * 2;
+        const int ds_gemm4_offset = n_id * 128 * 4 + k0_id * 8 * 2;
+        const int ds_gemm4_m_wave_offset = (wave_id % 2) * 32 * 128 * 4;
+        constexpr int ds_gemm4_kiter_offset = 8 * 4;
 
         // lse and d hbm offset and lds write read offset
         // constexpr int lse_d_step_offset = 64 * sizeof(float);
@@ -862,6 +862,7 @@ struct FmhaBwdDQDKDVKernel
            
             char* q_smem = d_smem + 64 * 4;
             char* do_smem = q_smem + 8192;
+            char* ds_smem = do_smem;
 
             *reinterpret_cast<float4*>(q_smem + kv_smem_offset) = q_reg[0];
             *reinterpret_cast<float4*>(q_smem + kv_smem_offset + kv_smem_reg_offset) = q_reg[1];
