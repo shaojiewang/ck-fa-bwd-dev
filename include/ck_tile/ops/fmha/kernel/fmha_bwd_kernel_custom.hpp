@@ -672,6 +672,10 @@ struct FmhaBwdDQDKDVKernel
         VGradDataType* dv_ptr = reinterpret_cast<VGradDataType*>(kargs.dv_ptr) +
                                 static_cast<long_index_t>(i_nhead) * kargs.nhead_stride_v +
                                 batch_offset_dv;
+        
+        AccDataType* dq_acc_ptr_tmp =
+                    reinterpret_cast<AccDataType*>(kargs.dq_acc_ptr) +
+                    static_cast<long_index_t>(i_nhead_) * kargs.nhead_stride_q + batch_offset_q;
 
         // vector type
         using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
@@ -789,9 +793,10 @@ struct FmhaBwdDQDKDVKernel
         
         // lds write offset
         // gemm4 ds offset
-        const int ds_lds_write_offset = n_id * 4 + k0_id * 128 * 8 + n_wave_repeat_id * 32 * 4;
-        constexpr int ds_lds_write_reg_offset = 128 * 4;
+        const int ds_lds_write_offset = n_id * 2 + k0_id * 128 * 4 * 2 + n_wave_repeat_id * 32 * 2;
+        constexpr int ds_lds_write_reg_offset = 128 * 2;
         constexpr int ds_lds_gemm_m_group_offset = 128 * 8 * 2;
+        constexpr int ds_lds_gemm_m_acc_reg_offset = 128 * 32 * 2;
         
         
         // lds read offset
@@ -803,9 +808,10 @@ struct FmhaBwdDQDKDVKernel
         constexpr int q_gemm3_do_gemm1_gemmk_offset = 64 * 8 * 2;
 
         // gemm4 ds offset
-        const int ds_gemm4_offset = n_id * 128 * 4 + k0_id * 8 * 2;
-        const int ds_gemm4_m_wave_offset = (wave_id % 2) * 32 * 128 * 4;
-        constexpr int ds_gemm4_kiter_offset = 8 * 4;
+        const int ds_gemm4_offset = n_id * 128 * 2 + k0_id * 4 * 2;
+        const int ds_gemm4_m_wave_offset = (wave_id % 2) * 32 * 128 * 2;
+        ds_gemm4_offset += ds_gemm4_m_wave_offset;
+        constexpr int ds_gemm4_kiter_offset = 8 * 2;
 
         // lse and d hbm offset and lds write read offset
         // constexpr int lse_d_step_offset = 64 * sizeof(float);
@@ -1076,12 +1082,44 @@ struct FmhaBwdDQDKDVKernel
                     dk_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0], 0, 0, 0);
                     dk_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1], 0, 0, 0);
 
+                    *reinterpret_cast<float*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k) = pt_reg_gemm1[0];
+                    *reinterpret_cast<float*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset) = pt_reg_gemm1[1];
+                    *reinterpret_cast<float*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset * 2) = pt_reg_gemm1[2];
+                    *reinterpret_cast<float*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset * 3) = pt_reg_gemm1[3];
+
                     q_smem += q_gemm3_do_gemm1_gemmk_offset;
                 }
             }
 
             // gemm 4
+            bfloat16x4 dp_reg_gemm4[2];
+            CVecType dq_acc;
+            dq_acc = {0};
 
+            __syncthreads();
+            int i_k_gemmk_gemm4 = 0;
+
+#pragma unroll
+            for(int i_gemm4_k = 0; i_gemm4_k < 128; i_gemm4_k += 16)
+            {
+                dp_reg_gemm4[0] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
+                ds_smem += ds_gemm4_kiter_offset;
+                dp_reg_gemm4[1] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
+                ds_smem += ds_gemm4_kiter_offset;
+                
+                dq_acc = GCN_MFMA_INSTR(dp_reg_gemm4[0], k_reg_to_gemm4[i_k_gemmk_gemm4], dq_acc, 0, 0, 0);
+                i_k_gemmk_gemm4++;
+                dq_acc = GCN_MFMA_INSTR(dp_reg_gemm4[1], k_reg_to_gemm4[i_k_gemmk_gemm4], dq_acc, 0, 0, 0);
+                i_k_gemmk_gemm4++;
+            }
+
+#pragma unrolll
+            for(int i_dq_acc = 0; i_dq_acc < 16; i_dq_acc++)
+            {
+                atomicAdd(dq_acc_ptr_tmp, dq_acc[i_dq_acc]);
+                dq_acc_ptr_tmp += 64 * kargs.stride_q;
+            }
+            
             __syncthreads();
 
             i_total_loops += 1;
