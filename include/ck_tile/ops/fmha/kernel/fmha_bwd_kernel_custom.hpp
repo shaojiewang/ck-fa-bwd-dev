@@ -791,6 +791,11 @@ struct FmhaBwdDQDKDVKernel
 
         constexpr int st_acc_gemmk_offset = 4;
         
+        // hbm store offset
+        const int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
+        const int dq_acc_wave_offset = (wave_id % 2) * 32 + wave_id / 2 * 32 * kargs.stride_q;
+        dq_acc_offset += dq_acc_wave_offset;
+
         // lds write offset
         // gemm4 ds offset
         const int ds_lds_write_offset = n_id * 2 + k0_id * 128 * 4 * 2 + n_wave_repeat_id * 32 * 2;
@@ -1116,7 +1121,7 @@ struct FmhaBwdDQDKDVKernel
 #pragma unrolll
             for(int i_dq_acc = 0; i_dq_acc < 16; i_dq_acc++)
             {
-                atomicAdd(dq_acc_ptr_tmp, dq_acc[i_dq_acc]);
+                atomicAdd(dq_acc_ptr_tmp + dq_acc_offset, dq_acc[i_dq_acc]);
                 dq_acc_ptr_tmp += 64 * kargs.stride_q;
             }
             
