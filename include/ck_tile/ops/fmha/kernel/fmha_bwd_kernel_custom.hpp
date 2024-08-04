@@ -675,7 +675,7 @@ struct FmhaBwdDQDKDVKernel
         
         AccDataType* dq_acc_ptr_tmp =
                     reinterpret_cast<AccDataType*>(kargs.dq_acc_ptr) +
-                    static_cast<long_index_t>(i_nhead_) * kargs.nhead_stride_q + batch_offset_q;
+                    static_cast<long_index_t>(i_nhead) * kargs.nhead_stride_q + batch_offset_q;
 
         // vector type
         using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
@@ -792,9 +792,9 @@ struct FmhaBwdDQDKDVKernel
         constexpr int st_acc_gemmk_offset = 4;
         
         // hbm store offset
-        const int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
-        const int dq_acc_wave_offset = (wave_id % 2) * 32 + wave_id / 2 * 32 * kargs.stride_q;
-        dq_acc_offset += dq_acc_wave_offset;
+        //int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
+        //const int dq_acc_wave_offset = (wave_id % 2) * 32 + wave_id / 2 * 32 * kargs.stride_q;
+        //dq_acc_offset += dq_acc_wave_offset;
 
         // lds write offset
         // gemm4 ds offset
@@ -813,7 +813,7 @@ struct FmhaBwdDQDKDVKernel
         constexpr int q_gemm3_do_gemm1_gemmk_offset = 64 * 8 * 2;
 
         // gemm4 ds offset
-        const int ds_gemm4_offset = n_id * 128 * 2 + k0_id * 4 * 2;
+        int ds_gemm4_offset = n_id * 128 * 2 + k0_id * 4 * 2;
         const int ds_gemm4_m_wave_offset = (wave_id % 2) * 32 * 128 * 2;
         ds_gemm4_offset += ds_gemm4_m_wave_offset;
         constexpr int ds_gemm4_kiter_offset = 8 * 2;
@@ -1112,18 +1112,35 @@ struct FmhaBwdDQDKDVKernel
                 dp_reg_gemm4[1] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
                 ds_smem += ds_gemm4_kiter_offset;
                 
-                dq_acc = GCN_MFMA_INSTR(dp_reg_gemm4[0], k_reg_to_gemm4[i_k_gemmk_gemm4], dq_acc, 0, 0, 0);
+                dq_acc = GCN_MFMA_INSTR(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), dq_acc, 0, 0, 0);
                 i_k_gemmk_gemm4++;
-                dq_acc = GCN_MFMA_INSTR(dp_reg_gemm4[1], k_reg_to_gemm4[i_k_gemmk_gemm4], dq_acc, 0, 0, 0);
+                dq_acc = GCN_MFMA_INSTR(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), dq_acc, 0, 0, 0);
                 i_k_gemmk_gemm4++;
             }
 
-#pragma unrolll
-            for(int i_dq_acc = 0; i_dq_acc < 16; i_dq_acc++)
+#if 0
+            //if(threadIdx.x == 0)
             {
-                atomicAdd(dq_acc_ptr_tmp + dq_acc_offset, dq_acc[i_dq_acc]);
-                dq_acc_ptr_tmp += 64 * kargs.stride_q;
+                printf("thread=%d, dq_acc[0]=%f, dq_acc_offset=%d\n", 
+                    type_convert<int>(threadIdx.x),
+                    dq_acc[0],
+                    dq_acc_offset);
             }
+#endif
+
+#pragma unroll
+            for(int i_dq_acc = 0; i_dq_acc < 4; i_dq_acc++)
+            {
+                //atomicAdd(dq_acc_ptr_tmp + dq_acc_offset, dq_acc[i_dq_acc * 4 + 0]);
+                dq_acc_ptr_tmp += kargs.stride_q;
+                //atomicAdd(dq_acc_ptr_tmp + dq_acc_offset, dq_acc[i_dq_acc * 4 + 1]);
+                dq_acc_ptr_tmp += kargs.stride_q;
+                //atomicAdd(dq_acc_ptr_tmp + dq_acc_offset, dq_acc[i_dq_acc * 4 + 2]);
+                dq_acc_ptr_tmp += kargs.stride_q;
+                //atomicAdd(dq_acc_ptr_tmp + dq_acc_offset, dq_acc[i_dq_acc * 4 + 3]);
+                dq_acc_ptr_tmp += 5 * kargs.stride_q;
+            }
+            dq_acc_ptr_tmp += 32 * kargs.stride_q;
             
             __syncthreads();
 
