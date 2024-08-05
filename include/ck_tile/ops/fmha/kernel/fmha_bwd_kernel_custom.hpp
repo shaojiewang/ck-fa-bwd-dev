@@ -840,7 +840,22 @@ struct FmhaBwdDQDKDVKernel
         CVecType dk_acc[2];
         dk_acc[0] = {0};
         dk_acc[1] = {0};
+       
+        float4 q_reg[2];
+        float4 do_reg[2];
+        float4 q_reg_tmp[2];
+        float4 do_reg_tmp[2];
+
+        q_reg[0] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+        q_ptr += q_do_load_reg_offset;
+        q_reg[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+        q_ptr += q_do_load_reg_offset;
         
+        do_reg[0] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
+        do_ptr += q_do_load_reg_offset;
+        do_reg[1] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
+        do_ptr += q_do_load_reg_offset;
+ 
         // core loop
         do
         {
@@ -863,16 +878,33 @@ struct FmhaBwdDQDKDVKernel
             //printf("thread:[%d], lse_reg=%f\n", type_convert<int>(threadIdx.x), lse_reg);
 
             // q and do: HBM->reg->lds
-            float4 q_reg[2];
-            q_reg[0] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+            // float4 q_reg[2];
+            if(i_total_loops < (num_total_loop - 1))
+            {
+#if 1
+            q_reg_tmp[0] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
             q_ptr += q_do_load_reg_offset;
-            q_reg[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+            q_reg_tmp[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
             q_ptr += q_do_load_reg_offset;
-            float4 do_reg[2];
-            do_reg[0] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
+#else
+            q_reg[0] = k_reg[0];
+            q_ptr += q_do_load_reg_offset + q_do_load_offset;
+            q_reg[1] = k_reg[1];
+            q_ptr += q_do_load_reg_offset;
+#endif
+            // float4 do_reg[2];
+#if 1
+            do_reg_tmp[0] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
             do_ptr += q_do_load_reg_offset;
-            do_reg[1] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
+            do_reg_tmp[1] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
             do_ptr += q_do_load_reg_offset;
+#else
+            do_reg[0] = v_reg[0];
+            do_ptr += q_do_load_reg_offset;
+            do_reg[1] = v_reg[1];
+            do_ptr += q_do_load_reg_offset;
+#endif
+            }
            
             char* q_smem = d_smem + 64 * 4;
             char* do_smem = q_smem + (128 + q_do_padding) * 64;
@@ -1155,8 +1187,23 @@ struct FmhaBwdDQDKDVKernel
             
             __syncthreads();
 
+            float4 q_do_swap_tmp;
+#pragma unroll
+            for(int i_qdo_reg = 0; i_qdo_reg < 2; i_qdo_reg++)
+            {
+                // q reg
+                q_do_swap_tmp = q_reg_tmp[i_qdo_reg];
+                q_reg_tmp[i_qdo_reg] = q_reg[i_qdo_reg];
+                q_reg[i_qdo_reg] = q_do_swap_tmp;
+                // do reg
+                q_do_swap_tmp = do_reg_tmp[i_qdo_reg];
+                do_reg_tmp[i_qdo_reg] = do_reg[i_qdo_reg];
+                do_reg[i_qdo_reg] = q_do_swap_tmp;
+            }
+
             i_total_loops += 1;
             // seqlen_q_step += kM0;
+            
         } while(i_total_loops < (num_total_loop - 0));
 
         // write out dv
