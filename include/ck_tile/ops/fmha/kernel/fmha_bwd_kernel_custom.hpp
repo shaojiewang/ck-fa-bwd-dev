@@ -714,12 +714,15 @@ struct FmhaBwdDQDKDVKernel
         v_reg[3] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
 
         char* k_smem = smem_ptr;
-        int kv_smem_offset = threadIdx.x * 16;
-        constexpr int kv_smem_reg_offset = 256 * 16;
-        *reinterpret_cast<float4*>(k_smem + kv_smem_offset) = k_reg[0];
-        *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset) = k_reg[1];
-        *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
-        *reinterpret_cast<float4*>(k_smem + kv_smem_offset + kv_smem_reg_offset * 3) = k_reg[3];
+        int kvqdo_smem_offset = threadIdx.x * 16;
+        constexpr int q_do_padding = 16;
+        int kvqdo_smem_offset_padding = kvqdo_smem_offset / 128 * q_do_padding;
+        kvqdo_smem_offset += kvqdo_smem_offset_padding;
+        constexpr int kv_smem_reg_offset = 32 * (64 * 2 + q_do_padding);
+        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset) = k_reg[0];
+        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset) = k_reg[1];
+        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
+        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * 3) = k_reg[3];
        
         __syncthreads();
  
@@ -729,7 +732,7 @@ struct FmhaBwdDQDKDVKernel
         int k0_id = wave_lane_id / 32;
         int n_id = wave_lane_id % 32;
         int n_wave_repeat_id = wave_id % 4;
-        int k_smem_gemm0_offset = n_wave_repeat_id * (32 * 64 * 2) + n_id * 64 * 2 + k0_id * 16;
+        int k_smem_gemm0_offset = n_wave_repeat_id * 32 * (64 * 2 + q_do_padding) + n_id * (64 * 2 + q_do_padding) + k0_id * 16;
         constexpr int k_smem_read_reg_offset = 32;
         kt_reg_to_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset);
         kt_reg_to_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
@@ -739,9 +742,9 @@ struct FmhaBwdDQDKDVKernel
         float2 k_reg_to_gemm4[16];
         unsigned short k_gemm4[4];
         int gemm4_n_wave_id = wave_id / 2;
-        int k_smem_gemm4_offset = n_id * 2 + k0_id * 64 * 4 * 2 + gemm4_n_wave_id * 32 * 2;
-        constexpr int k_smem_gemm4_offset_k1 = 64 * 2;
-        constexpr int k_smem_gemm4_offset_reg = 64 * 2 * 8;
+        int k_smem_gemm4_offset = n_id * 2 + k0_id * (64 * 2 + q_do_padding) * 4 + gemm4_n_wave_id * 32 * 2;
+        constexpr int k_smem_gemm4_offset_k1 = 64 * 2 + q_do_padding;
+        constexpr int k_smem_gemm4_offset_reg = (64 * 2 + q_do_padding) * 8;
 
 #pragma unroll
         for (int i = 0; i < 16; i++)
@@ -762,10 +765,10 @@ struct FmhaBwdDQDKDVKernel
         __syncthreads();
 
         char* v_smem = smem_ptr;
-        *reinterpret_cast<float4*>(v_smem + kv_smem_offset) = v_reg[0];
-        *reinterpret_cast<float4*>(v_smem + kv_smem_offset + kv_smem_reg_offset) = v_reg[1];
-        *reinterpret_cast<float4*>(v_smem + kv_smem_offset + kv_smem_reg_offset * 2) = v_reg[2];
-        *reinterpret_cast<float4*>(v_smem + kv_smem_offset + kv_smem_reg_offset * 3) = v_reg[3];
+        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset) = v_reg[0];
+        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset) = v_reg[1];
+        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * 2) = v_reg[2];
+        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * 3) = v_reg[3];
 
         __syncthreads();
 
@@ -798,22 +801,23 @@ struct FmhaBwdDQDKDVKernel
 
         // lds write offset
         // gemm4 ds offset
-        const int ds_lds_write_offset = n_id * 2 + k0_id * 128 * 4 * 2 + n_wave_repeat_id * 32 * 2;
-        constexpr int ds_lds_write_reg_offset = 128 * 2;
-        constexpr int ds_lds_gemm_m_group_offset = 128 * 8 * 2;
-        constexpr int ds_lds_gemm_m_acc_reg_offset = 128 * 32 * 2;
+        constexpr int ds_padding_bytes = 8;
+        const int ds_lds_write_offset = n_id * 2 + k0_id * (128 * 2 + ds_padding_bytes) * 4 + n_wave_repeat_id * 32 * 2;
+        constexpr int ds_lds_write_reg_offset = 128 * 2 + ds_padding_bytes;
+        constexpr int ds_lds_gemm_m_group_offset = (128 * 2 + ds_padding_bytes) * 8;
+        constexpr int ds_lds_gemm_m_acc_reg_offset = (128 * 2 + ds_padding_bytes) * 32;
 
         // lds read offset
-        int q_gemm0_do_gemm2_offset = n_id * 64 * 2 + k0_id * 16;
-        constexpr int q_gemm0_do_gemm2_reg_offset = 32 * 64 * 2;
+        int q_gemm0_do_gemm2_offset = n_id * (64 * 2 + q_do_padding) + k0_id * 16;
+        constexpr int q_gemm0_do_gemm2_reg_offset = 32 * (64 * 2 + q_do_padding);
         constexpr int q_gemm0_do_gemm2_gemmk_offset = 16 * 2;
-        int q_gemm3_do_gemm1_offset = n_id * 4 + k0_id * 64 * 4 * 2;
-        constexpr int q_gemm3_do_gemm1_reg_offset = 64 * 2;
-        constexpr int q_gemm3_do_gemm1_gemmk_offset = 64 * 8 * 2;
+        int q_gemm3_do_gemm1_offset = n_id * 4 + k0_id * (64 * 2 + q_do_padding) * 4;
+        constexpr int q_gemm3_do_gemm1_reg_offset = 64 * 2 + q_do_padding;
+        constexpr int q_gemm3_do_gemm1_gemmk_offset = (64 * 2 + q_do_padding) * 8;
 
         // gemm4 ds offset
-        int ds_gemm4_offset = n_id * 128 * 2 + k0_id * 4 * 2;
-        const int ds_gemm4_m_wave_offset = (wave_id % 2) * 32 * 128 * 2;
+        int ds_gemm4_offset = n_id * (128 * 2 + ds_padding_bytes) + k0_id * 4 * 2;
+        const int ds_gemm4_m_wave_offset = (wave_id % 2) * (128 * 2 + ds_padding_bytes) * 32;
         ds_gemm4_offset += ds_gemm4_m_wave_offset;
         constexpr int ds_gemm4_kiter_offset = 8 * 2;
 
@@ -871,13 +875,13 @@ struct FmhaBwdDQDKDVKernel
             do_ptr += q_do_load_reg_offset;
            
             char* q_smem = d_smem + 64 * 4;
-            char* do_smem = q_smem + 8192;
+            char* do_smem = q_smem + (128 + q_do_padding) * 64;
             char* ds_smem = do_smem;
 
-            *reinterpret_cast<float4*>(q_smem + kv_smem_offset) = q_reg[0];
-            *reinterpret_cast<float4*>(q_smem + kv_smem_offset + kv_smem_reg_offset) = q_reg[1];
-            *reinterpret_cast<float4*>(do_smem + kv_smem_offset) = do_reg[0];
-            *reinterpret_cast<float4*>(do_smem + kv_smem_offset + kv_smem_reg_offset) = do_reg[1];
+            *reinterpret_cast<float4*>(q_smem + kvqdo_smem_offset) = q_reg[0];
+            *reinterpret_cast<float4*>(q_smem + kvqdo_smem_offset + kv_smem_reg_offset) = q_reg[1];
+            *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset) = do_reg[0];
+            *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset + kv_smem_reg_offset) = do_reg[1];
 
             __syncthreads();
 
@@ -1105,10 +1109,18 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
             for(int i_gemm4_k = 0; i_gemm4_k < 128; i_gemm4_k += 16)
             {
+#if 1
                 dp_reg_gemm4[0] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
                 ds_smem += ds_gemm4_kiter_offset;
                 dp_reg_gemm4[1] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
                 ds_smem += ds_gemm4_kiter_offset;
+#else
+                dp_reg_gemm4[0] = {1};
+                ds_smem += ds_gemm4_kiter_offset + ds_gemm4_offset;
+                dp_reg_gemm4[1] = {1};
+                ds_smem += ds_gemm4_kiter_offset;
+
+#endif
                 
                 st_acc[0] = GCN_MFMA_INSTR(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
                 i_k_gemmk_gemm4++;
@@ -1119,6 +1131,16 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
             for(int i_dq_acc = 0; i_dq_acc < 4; i_dq_acc++)
             {
+#if 0
+                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale;
+                dq_acc_ptr_tmp += kargs.stride_q;
+                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale;
+                dq_acc_ptr_tmp += kargs.stride_q;
+                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 2] * kargs.raw_scale;
+                dq_acc_ptr_tmp += kargs.stride_q;
+                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale;
+                dq_acc_ptr_tmp += kargs.stride_q;
+#else
                 unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale);
                 dq_acc_ptr_tmp += kargs.stride_q;
                 unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale);
@@ -1127,6 +1149,7 @@ struct FmhaBwdDQDKDVKernel
                 dq_acc_ptr_tmp += kargs.stride_q;
                 unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale);
                 dq_acc_ptr_tmp += 5 * kargs.stride_q;
+#endif
             }
             dq_acc_ptr_tmp += 32 * kargs.stride_q;
             
