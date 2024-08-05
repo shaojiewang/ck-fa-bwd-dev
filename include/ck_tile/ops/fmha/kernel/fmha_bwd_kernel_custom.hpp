@@ -887,9 +887,9 @@ struct FmhaBwdDQDKDVKernel
             q_reg_tmp[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
             q_ptr += q_do_load_reg_offset;
 #else
-            q_reg[0] = k_reg[0];
+            q_reg_tmp[0] = k_reg[0];
             q_ptr += q_do_load_reg_offset + q_do_load_offset;
-            q_reg[1] = k_reg[1];
+            q_reg_tmp[1] = k_reg[1];
             q_ptr += q_do_load_reg_offset;
 #endif
             // float4 do_reg[2];
@@ -899,9 +899,9 @@ struct FmhaBwdDQDKDVKernel
             do_reg_tmp[1] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
             do_ptr += q_do_load_reg_offset;
 #else
-            do_reg[0] = v_reg[0];
+            do_reg_tmp[0] = v_reg[0];
             do_ptr += q_do_load_reg_offset;
-            do_reg[1] = v_reg[1];
+            do_reg_tmp[1] = v_reg[1];
             do_ptr += q_do_load_reg_offset;
 #endif
             }
