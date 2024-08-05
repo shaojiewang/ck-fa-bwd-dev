@@ -956,6 +956,7 @@ struct FmhaBwdDQDKDVKernel
             lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset);
 
             st_acc[0][0] = exp2(scale * st_acc[0][0] - lse_d[0][0]);
+#if 1
             st_acc[0][1] = exp2(scale * st_acc[0][1] - lse_d[0][1]);
             st_acc[0][2] = exp2(scale * st_acc[0][2] - lse_d[0][2]);
             st_acc[0][3] = exp2(scale * st_acc[0][3] - lse_d[0][3]);
@@ -998,6 +999,7 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1][12] = exp2(scale * st_acc[1][12] - lse_d[1][0]);
             st_acc[1][13] = exp2(scale * st_acc[1][13] - lse_d[1][1]);
             st_acc[1][14] = exp2(scale * st_acc[1][14] - lse_d[1][2]);
+#endif
             st_acc[1][15] = exp2(scale * st_acc[1][15] - lse_d[1][3]);
 
             // gemm1
@@ -1071,6 +1073,7 @@ struct FmhaBwdDQDKDVKernel
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[1], 0, 0, 0);
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[1], 0, 0, 0);
 
+#if 1
             // ds
 #pragma unroll
             for(int i_dpt = 0; i_dpt < 2; i_dpt++)
@@ -1093,6 +1096,7 @@ struct FmhaBwdDQDKDVKernel
                     dpt_acc[i_dpt][7 + i_dpt_vec] = st_acc[i_dpt][7 + i_dpt_vec] * (dpt_acc[i_dpt][7 + i_dpt_vec] - lse_d[1][3]);
                 }    
             }
+#endif
 
             // gemm 3
 #pragma unroll
