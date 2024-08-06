@@ -802,7 +802,7 @@ struct FmhaBwdDQDKDVKernel
         // lds write offset
         // gemm4 ds offset
         constexpr int ds_padding_bytes = 8;
-#if 0
+#if 1
         const int ds_lds_write_offset = n_id * 2 + k0_id * (128 * 2 + ds_padding_bytes) * 4 + n_wave_repeat_id * 32 * 2;
         constexpr int ds_lds_write_reg_offset = 128 * 2 + ds_padding_bytes;
         constexpr int ds_lds_gemm_m_group_offset = (128 * 2 + ds_padding_bytes) * 8;
@@ -1149,7 +1149,7 @@ struct FmhaBwdDQDKDVKernel
                     dk_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0], 0, 0, 0);
                     dk_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1], 0, 0, 0);
 
-#if 0
+#if 1
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k) = pt_reg_gemm1[0];
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset) = pt_reg_gemm1[1];
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset * 2) = pt_reg_gemm1[2];
