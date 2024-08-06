@@ -647,7 +647,7 @@ using fmha_bwd_convert_dq_{F_idx} =
     typename ck_tile::BlockFmhaBwdConvertQGrad<fmha_bwd_convert_dq_pipeline_problem_{F_idx}>;
 
 using fmha_bwd_convert_dq_kernel_{F_idx} =
-    ck_tile::FmhaBwdConvertQGradKernel<ck_tile::FmhaBwdQTilePartitioner<{F_bm0}>,
+    ck_tile::FmhaBwdConvertQGradKernel<ck_tile::FmhaBwdQGradTilePartitioner<{F_bm0}>,
                                        fmha_bwd_convert_dq_{F_idx}>;
 
 using convert_dq_trait_{F_idx} = fmha_bwd_convert_dq_traits_<{F_hdim},

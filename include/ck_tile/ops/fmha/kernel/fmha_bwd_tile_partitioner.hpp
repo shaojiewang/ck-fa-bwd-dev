@@ -47,4 +47,25 @@ struct FmhaBwdQTilePartitioner
     }
 };
 
+template <ck_tile::index_t kM0>
+struct FmhaBwdQGradTilePartitioner
+{
+    CK_TILE_HOST static constexpr auto
+    GridSize(ck_tile::index_t batch_size_, ck_tile::index_t nhead_, ck_tile::index_t seqlen_q_)
+    {
+        // TODO: this may need tuning
+        //return dim3(ck_tile::integer_divide_ceil(seqlen_q_, kM0), nhead_, batch_size_);
+        return dim3(ck_tile::integer_divide_ceil(seqlen_q_, kM0 / kM0), batch_size_, nhead_ / nhead_);
+    }
+
+    CK_TILE_DEVICE auto operator()(ck_tile::index_t /*seqlen_q*/)
+    {
+        const index_t i_block = blockIdx.x;
+        const index_t i_nhead = blockIdx.z;
+        const index_t i_batch = blockIdx.y;
+
+        return ck_tile::make_tuple(i_block, i_nhead, i_batch);
+    }
+};
+
 } // namespace ck_tile

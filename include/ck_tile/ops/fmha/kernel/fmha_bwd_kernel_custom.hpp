@@ -2069,7 +2069,8 @@ struct FmhaBwdConvertQGradKernel
         // divide problem
         const auto [i_tile_m, i_nhead, i_batch] = TilePartitioner{}(kargs.seqlen_q);
 
-        const index_t i_m0 = __builtin_amdgcn_readfirstlane(i_tile_m * kM0);
+        // const index_t i_m0 = __builtin_amdgcn_readfirstlane(i_tile_m * kM0);
+        const index_t i_m0 = __builtin_amdgcn_readfirstlane(i_tile_m * 1);
 
         long_index_t batch_offset_dq = 0;
         if constexpr(kIsGroupMode)
@@ -2175,7 +2176,47 @@ struct FmhaBwdConvertQGradKernel
         }
         else
         {
-            FmhaBwdConvertQGrad{}(dq_acc_dram_window, dq_dram_window);
+            const AccDataType* dq_acc_ptr =
+                reinterpret_cast<const AccDataType*>(kargs.dq_acc_ptr) +
+                static_cast<long_index_t>(i_nhead) * (kargs.nhead_stride_dq) + batch_offset_dq;
+
+            
+            dq_ptr += kargs.stride_dq * i_m0;
+            dq_acc_ptr += kargs.stride_dq * i_m0;
+            constexpr int32_t m1 = 0x07060302;
+            int reg_offset = threadIdx.x * 4;
+            int reg_offset_acc = reg_offset;
+            int num_head_q = kargs.stride_dq / kargs.hdim_q;
+            constexpr int dq_unroll = 4;
+            float4 dq_acc_reg[dq_unroll];
+            float2 dq_reg[dq_unroll];
+
+            char* dq_ptr_tmp;
+
+            for(int i = 0; i < num_head_q; i += 16 * dq_unroll)
+            {
+#pragma unroll
+                for(int j = 0; j < dq_unroll; j++)
+                {
+                    dq_acc_reg[j] = *reinterpret_cast<const float4*>(dq_acc_ptr + reg_offset_acc);
+                    reg_offset_acc += 16 * 64;
+                }
+#pragma unroll
+                for(int j = 0; j < dq_unroll; j++)
+                {
+                    dq_reg[j].x = bit_cast<float>(__builtin_amdgcn_perm(bit_cast<uint32_t>(dq_acc_reg[j].y), bit_cast<uint32_t>(dq_acc_reg[j].x), m1));
+                    dq_reg[j].y = bit_cast<float>(__builtin_amdgcn_perm(bit_cast<uint32_t>(dq_acc_reg[j].w), bit_cast<uint32_t>(dq_acc_reg[j].z), m1));
+                }
+#pragma unroll
+                for(int j = 0; j < dq_unroll; j++)
+                {
+                    dq_ptr_tmp = reinterpret_cast<char*>(dq_ptr + reg_offset);
+                    *reinterpret_cast<float2*>(dq_ptr_tmp) = dq_reg[j];
+                    reg_offset += 16 * 64;
+                }
+            }
+
+            // FmhaBwdConvertQGrad{}(dq_acc_dram_window, dq_dram_window);
         }
     }
 };
