@@ -909,12 +909,12 @@ struct FmhaBwdDQDKDVKernel
             char* q_smem = d_smem + 64 * 4;
             char* do_smem = q_smem + (128 + q_do_padding) * 64;
             char* ds_smem = do_smem;
-
+#if 1
             *reinterpret_cast<float4*>(q_smem + kvqdo_smem_offset) = q_reg[0];
             *reinterpret_cast<float4*>(q_smem + kvqdo_smem_offset + kv_smem_reg_offset) = q_reg[1];
             *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset) = do_reg[0];
             *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset + kv_smem_reg_offset) = do_reg[1];
-
+#endif
             __syncthreads();
 
             // gemm 0
@@ -927,6 +927,7 @@ struct FmhaBwdDQDKDVKernel
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
 
+#if 1
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0, 0);
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0, 0);
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[1], 0, 0, 0);
@@ -935,12 +936,14 @@ struct FmhaBwdDQDKDVKernel
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[0], 0, 0, 0);
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[1], 0, 0, 0);
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[1], 0, 0, 0);
+#endif
 
             q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
 
+#if 1
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[0], 0, 0, 0);
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[2].xy[1], st_acc[0], 0, 0, 0);
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[1], 0, 0, 0);
@@ -949,6 +952,7 @@ struct FmhaBwdDQDKDVKernel
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[0], 0, 0, 0);
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[1], 0, 0, 0);
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[1], 0, 0, 0);
+#endif
 
             // softmax
             floatx4 lse_d[2];
@@ -1050,6 +1054,7 @@ struct FmhaBwdDQDKDVKernel
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
 
+#if 1
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[0], 0, 0, 0);
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[0], 0, 0, 0);
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[1], 0, 0, 0);
@@ -1058,12 +1063,14 @@ struct FmhaBwdDQDKDVKernel
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[0], 0, 0, 0);
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[1], 0, 0, 0);
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[1], 0, 0, 0);
+#endif
 
             q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
 
+#if 1
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[0], 0, 0, 0);
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[0], 0, 0, 0);
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[1], 0, 0, 0);
@@ -1072,6 +1079,7 @@ struct FmhaBwdDQDKDVKernel
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[0], 0, 0, 0);
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[1], 0, 0, 0);
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[1], 0, 0, 0);
+#endif
 
 #if 1
             // ds
