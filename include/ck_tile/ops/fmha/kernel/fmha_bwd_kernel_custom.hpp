@@ -802,10 +802,12 @@ struct FmhaBwdDQDKDVKernel
         // lds write offset
         // gemm4 ds offset
         constexpr int ds_padding_bytes = 8;
+#if 0
         const int ds_lds_write_offset = n_id * 2 + k0_id * (128 * 2 + ds_padding_bytes) * 4 + n_wave_repeat_id * 32 * 2;
         constexpr int ds_lds_write_reg_offset = 128 * 2 + ds_padding_bytes;
         constexpr int ds_lds_gemm_m_group_offset = (128 * 2 + ds_padding_bytes) * 8;
         constexpr int ds_lds_gemm_m_acc_reg_offset = (128 * 2 + ds_padding_bytes) * 32;
+#endif
 
         // lds read offset
         int q_gemm0_do_gemm2_offset = n_id * (64 * 2 + q_do_padding) + k0_id * 16;
@@ -922,10 +924,13 @@ struct FmhaBwdDQDKDVKernel
             CVecType st_acc[2];
             st_acc[0] = {0};
             st_acc[1] = {0};
+
+#if 1
             q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset);
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
+#endif
 
 #if 1
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0, 0);
@@ -938,10 +943,12 @@ struct FmhaBwdDQDKDVKernel
             st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[1], 0, 0, 0);
 #endif
 
+#if 1
             q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
+#endif
 
 #if 1
             st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[0], 0, 0, 0);
@@ -1018,10 +1025,12 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
                 for(int i_st_acc = 0; i_st_acc < 4; i_st_acc++)
                 {
+#if 1
                     do_reg_gemm1_tmp[0] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
                     do_reg_gemm1_tmp[1] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset);
                     do_reg_gemm1_tmp[2] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2);
                     do_reg_gemm1_tmp[3] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3);
+#endif
 
                     pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[i_st_acc_reg_k][0 + st_acc_gemmk_offset * i_st_acc]);
                     pt_reg_gemm1[1] = type_convert<bf16_t, float>(st_acc[i_st_acc_reg_k][1 + st_acc_gemmk_offset * i_st_acc]);
@@ -1049,10 +1058,12 @@ struct FmhaBwdDQDKDVKernel
             CVecType dpt_acc[2];
             dpt_acc[0] = {0};
             dpt_acc[1] = {0};
+#if 1
             q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset);
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
+#endif
 
 #if 1
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[0], 0, 0, 0);
@@ -1065,10 +1076,12 @@ struct FmhaBwdDQDKDVKernel
             dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[1], 0, 0, 0);
 #endif
 
+#if 1
             q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
             q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
             q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
+#endif
 
 #if 1
             dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[0], 0, 0, 0);
@@ -1113,10 +1126,12 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
                 for(int i_st_acc = 0; i_st_acc < 4; i_st_acc++)
                 {
+#if 1 
                     do_reg_gemm1_tmp[0] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset);
                     do_reg_gemm1_tmp[1] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset);
                     do_reg_gemm1_tmp[2] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2);
                     do_reg_gemm1_tmp[3] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3);
+#endif
 
                     pt_reg_gemm1[0] = type_convert<bf16_t, float>(dpt_acc[i_st_acc_reg_k][0 + st_acc_gemmk_offset * i_st_acc]);
                     pt_reg_gemm1[1] = type_convert<bf16_t, float>(dpt_acc[i_st_acc_reg_k][1 + st_acc_gemmk_offset * i_st_acc]);
@@ -1134,10 +1149,12 @@ struct FmhaBwdDQDKDVKernel
                     dk_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0], 0, 0, 0);
                     dk_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1], 0, 0, 0);
 
+#if 0
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k) = pt_reg_gemm1[0];
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset) = pt_reg_gemm1[1];
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset * 2) = pt_reg_gemm1[2];
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset * 3) = pt_reg_gemm1[3];
+#endif
 
                     q_smem += q_gemm3_do_gemm1_gemmk_offset;
                 }
