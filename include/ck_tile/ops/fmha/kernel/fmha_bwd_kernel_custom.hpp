@@ -834,17 +834,17 @@ struct FmhaBwdDQDKDVKernel
         
         // hbm store offset
         int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
-        const int dq_acc_wave_offset = (wave_id / 2) * 32 + (wave_id % 2) * 32 * kargs.stride_q;
+        const int dq_acc_wave_offset = (wave_id / kGemm4rm) * kGemm0Gemm2Gemm4WarpN + (wave_id % kGemm4rm) * kGemm0Gemm2Gemm4WarpM * kargs.stride_q;
         dq_acc_offset += dq_acc_wave_offset;
 
         // lds write offset
         // gemm4 ds offset
         constexpr int ds_padding_bytes = 8;
 #if 1
-        const int ds_lds_write_offset = n_id * 2 + k0_id * (128 * 2 + ds_padding_bytes) * 4 + n_wave_repeat_id * 32 * 2;
-        constexpr int ds_lds_write_reg_offset = 128 * 2 + ds_padding_bytes;
-        constexpr int ds_lds_gemm_m_group_offset = (128 * 2 + ds_padding_bytes) * 8;
-        constexpr int ds_lds_gemm_m_acc_reg_offset = (128 * 2 + ds_padding_bytes) * 32;
+        const int ds_lds_write_offset = n_id * sizeof(KDataType) + k0_id * (kN0 * sizeof(KDataType) + ds_padding_bytes) * 4 + n_wave_repeat_id * kGemm0Gemm2Gemm4WarpM * sizeof(KDataType);
+        constexpr int ds_lds_write_reg_offset = kN0 * sizeof(KDataType) + ds_padding_bytes;
+        constexpr int ds_lds_gemm_m_group_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * 8;
+        constexpr int ds_lds_gemm_m_acc_reg_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm0Gemm2Gemm4WarpM;
 #endif
 
         // lds read offset
