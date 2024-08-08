@@ -91,8 +91,16 @@ struct FmhaBwdDQDKDVKernel
     static constexpr ck_tile::index_t kGemm0Gemm2rn = Gemm0Gemm2BlockWarps::at(ck_tile::number<1>{});
     static constexpr ck_tile::index_t kGemm1Gemm3rm = Gemm1Gemm3BlockWarps::at(ck_tile::number<0>{});
     static constexpr ck_tile::index_t kGemm1Gemm3rn = Gemm1Gemm3BlockWarps::at(ck_tile::number<1>{});
-    
+    static constexpr ck_tile::index_t kGemm4rm = Gemm4BlockWarps::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm4rn = Gemm4BlockWarps::at(ck_tile::number<1>{});
 
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpM = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpN = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<1>{});
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpK = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<2>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpM = Gemm1Gemm3WarpTile::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpN = Gemm1Gemm3WarpTile::at(ck_tile::number<1>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpK = Gemm1Gemm3WarpTile::at(ck_tile::number<2>{});
+    
     // clang-format off
     template <typename T> struct t2s;
     template <> struct t2s<ck_tile::fp16_t> { static constexpr const char * name = "fp16"; };
@@ -716,41 +724,46 @@ struct FmhaBwdDQDKDVKernel
         constexpr int32_t m1 = 0x07060302;
 
         // prepare k and v_t in smem
-        float4 k_reg[4];
+        constexpr int k_reg_num = kN0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * 16);
+        constexpr int k_reg_row = kBlockSize * 16 / (kQKHeaddim * sizeof(KDataType));
+        float4 k_reg[k_reg_num];
         int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_k;
-        int kv_reg_offset = kargs.stride_k * 32;
+        int kv_reg_offset = kargs.stride_k * k_reg_row;
 
-        k_reg[0] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        k_ptr += kv_reg_offset;
-        k_reg[1] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        k_ptr += kv_reg_offset;
-        k_reg[2] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        k_ptr += kv_reg_offset;
-        k_reg[3] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
+#pragma unroll
+        for(int i_k_reg = 0; i_k_reg < k_reg_num; i_k_reg++)
+        {
+            k_reg[i_k_reg] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
+            k_ptr += kv_reg_offset;
+        }
 
-        float4 v_reg[4];
+        constexpr int v_reg_num = kN0 * kVHeaddim * sizeof(VDataType) / (kBlockSize * 16);
+        // constexpr int v_reg_row = kBlockSize * 16 / (kVHeaddim * sizeof(VDataType));
+        float4 v_reg[v_reg_num];
         
-        v_reg[0] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        v_ptr += kv_reg_offset;
-        v_reg[1] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        v_ptr += kv_reg_offset;
-        v_reg[2] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        v_ptr += kv_reg_offset;
-        v_reg[3] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
+#pragma unroll
+        for(int i_v_reg = 0; i_v_reg < v_reg_num; i_v_reg++)
+        {
+            v_reg[i_v_reg] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
+            v_ptr += kv_reg_offset;
+        }
 
         char* k_smem = smem_ptr;
-        int kvqdo_smem_offset = threadIdx.x * 16;
-        constexpr int q_do_padding = 16;
-        int kvqdo_smem_offset_padding = kvqdo_smem_offset / 128 * q_do_padding;
+        int kvqdo_smem_offset = threadIdx.x * sizeof(float4);
+        constexpr int q_do_padding = sizeof(float4);
+        int kvqdo_smem_offset_padding = kvqdo_smem_offset / kN0 * q_do_padding;
         kvqdo_smem_offset += kvqdo_smem_offset_padding;
-        constexpr int kv_smem_reg_offset = 32 * (64 * 2 + q_do_padding);
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset) = k_reg[0];
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset) = k_reg[1];
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * 3) = k_reg[3];
+        constexpr int kv_smem_reg_offset = k_reg_row * (kQKHeaddim * sizeof(KDataType) + q_do_padding);
+
+#pragma unroll
+        for(int i_k_reg = 0; i_k_reg < k_reg_num; i_k_reg++)
+        {
+            *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * i_k_reg) = k_reg[i_k_reg];
+        }
        
         __syncthreads();
- 
+
+        constexpr int kt_reg_gemm0_vt_reg_gemm2_num =  
         _BF16x8_t kt_reg_to_gemm0[4];
         int wave_id = threadIdx.x / 64;
         int wave_lane_id = threadIdx.x % 64;
@@ -806,7 +819,6 @@ struct FmhaBwdDQDKDVKernel
         __syncthreads();
 
         // prepare core loop
-        constexpr int kM0 = 64;
         auto seqlen_q_start = 0;
         auto seqlen_q_end = kargs.seqlen_q;
         index_t i_total_loops = 0;
@@ -958,14 +970,14 @@ struct FmhaBwdDQDKDVKernel
 #endif
 
 #if 1
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[1], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[1], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[1], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[1], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[0], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[0], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[1], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[1], 0, 0, 0);
 #endif
 
 #if 1
@@ -976,14 +988,14 @@ struct FmhaBwdDQDKDVKernel
 #endif
 
 #if 1
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[2].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[2].xy[1], st_acc[1], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[1], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[0], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[2].xy[1], st_acc[0], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[1], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[2].xy[1], st_acc[1], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[0], 0, 0, 0);
+            st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[0], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[1], 0, 0, 0);
+            st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[1], 0, 0, 0);
 #endif
 
             // softmax
@@ -1070,8 +1082,8 @@ struct FmhaBwdDQDKDVKernel
                     do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
                     do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
             
-                    dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
-                    dv_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
+                    dv_acc[0] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
+                    dv_acc[1] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
 
                     do_smem += q_gemm3_do_gemm1_gemmk_offset;
                 }
@@ -1091,14 +1103,14 @@ struct FmhaBwdDQDKDVKernel
 #endif
 
 #if 1
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[1], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[1], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[1], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[1], 0, 0, 0);
 #endif
 
 #if 1
@@ -1109,14 +1121,14 @@ struct FmhaBwdDQDKDVKernel
 #endif
 
 #if 1
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[1], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[1], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[1], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[0], 0, 0, 0);
+            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[0], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[1], 0, 0, 0);
+            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[1], 0, 0, 0);
 #endif
 
 #if 1
@@ -1171,8 +1183,8 @@ struct FmhaBwdDQDKDVKernel
                     do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
                     do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
             
-                    dk_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0], 0, 0, 0);
-                    dk_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1], 0, 0, 0);
+                    dk_acc[0] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0], 0, 0, 0);
+                    dk_acc[1] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1], 0, 0, 0);
 
 #if 1
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k) = pt_reg_gemm1[0];
@@ -1208,9 +1220,9 @@ struct FmhaBwdDQDKDVKernel
 
 #endif
                 
-                st_acc[0] = GCN_MFMA_INSTR(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
+                st_acc[0] = GCN_MFMA_INSTR_32(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
                 i_k_gemmk_gemm4++;
-                st_acc[0] = GCN_MFMA_INSTR(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
+                st_acc[0] = GCN_MFMA_INSTR_32(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
                 i_k_gemmk_gemm4++;
             }
 
