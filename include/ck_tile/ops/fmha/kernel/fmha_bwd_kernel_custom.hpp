@@ -725,10 +725,12 @@ struct FmhaBwdDQDKDVKernel
         constexpr int32_t m1 = 0x07060302;
 
         // prepare k and v_t in smem
-        constexpr int k_reg_num = kN0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * 16);
-        constexpr int k_reg_row = kBlockSize * 16 / (kQKHeaddim * sizeof(KDataType));
+        constexpr int k_reg_num = kN0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * sizeof(float4));
+        constexpr int k_reg_row = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
+        constexpr int num_threads_per_hd_global_load = kQKHeaddim * sizeof(KDataType) / sizeof(float4);
+        constexpr int num_threads_per_hd_global_load_minus_1 = num_threads_per_hd_global_load - 1;
         float4 k_reg[k_reg_num];
-        int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_k;
+        int kv_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * num_threads_per_hd_global_load + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_k;
         int kv_reg_offset = kargs.stride_k * k_reg_row;
 
 #pragma unroll
@@ -738,8 +740,7 @@ struct FmhaBwdDQDKDVKernel
             k_ptr += kv_reg_offset;
         }
 
-        constexpr int v_reg_num = kN0 * kVHeaddim * sizeof(VDataType) / (kBlockSize * 16);
-        // constexpr int v_reg_row = kBlockSize * 16 / (kVHeaddim * sizeof(VDataType));
+        constexpr int v_reg_num = kN0 * kVHeaddim * sizeof(VDataType) / (kBlockSize * sizeof(float4));
         float4 v_reg[v_reg_num];
         
 #pragma unroll
@@ -780,45 +781,40 @@ struct FmhaBwdDQDKDVKernel
             kt_reg_to_gemm0[i_kt_reg_gemm0] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * i_kt_reg_gemm0);
         }
 
-        constexpr int k_reg_gemm4_num = kGemm4rm * kM0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * sizeof(bfloat16x4));
+        constexpr int k_reg_gemm4_num = kGemm4rm * kN0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * sizeof(bfloat16x4));
         bfloat16x4 k_reg_to_gemm4[k_reg_gemm4_num];
-        unsigned short k_gemm4[4];
-        int gemm4_n_wave_id = wave_id / 2;
-        int k_smem_gemm4_offset = n_id * 2 + k0_id * (64 * 2 + q_do_padding) * 4 + gemm4_n_wave_id * 32 * 2;
-        constexpr int k_smem_gemm4_offset_k1 = 64 * 2 + q_do_padding;
-        constexpr int k_smem_gemm4_offset_reg = (64 * 2 + q_do_padding) * 8;
+        int gemm4_n_wave_id = wave_id / kGemm4rn;
+        int k_smem_gemm4_offset = n_id * sizeof(KDataType) + k0_id * (kQKHeaddim * sizeof(KDataType) + q_do_padding) * 4 + gemm4_n_wave_id * kGemm0Gemm2Gemm4WarpN * sizeof(KDataType);
+        constexpr int k_smem_gemm4_offset_k1 = kQKHeaddim * sizeof(KDataType)  + q_do_padding;
+        constexpr int k_smem_gemm4_offset_reg = (kQKHeaddim * sizeof(KDataType) + q_do_padding) * kGemm4WarpK;
 
 #pragma unroll
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < k_reg_gemm4_num; i++)
         {
-            k_gemm4[0] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset);
-            k_gemm4[1] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1);
-            k_gemm4[2] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 2);
-            k_gemm4[3] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 3);
+            k_reg_to_gemm4[i][0] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset);
+            k_reg_to_gemm4[i][1] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1);
+            k_reg_to_gemm4[i][2] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 2);
+            k_reg_to_gemm4[i][3] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 3);
             k_smem_gemm4_offset += k_smem_gemm4_offset_reg;
-            asm volatile("v_pack_b32_f16 %0, %1, %2"
-                         : "=v"(k_reg_to_gemm4[i].x)
-                         : "v"(k_gemm4[0]), "v"(k_gemm4[1]));
-            asm volatile("v_pack_b32_f16 %0, %1, %2"
-                         : "=v"(k_reg_to_gemm4[i].y)
-                         : "v"(k_gemm4[2]), "v"(k_gemm4[3]));
         }
 
         __syncthreads();
 
         char* v_smem = smem_ptr;
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset) = v_reg[0];
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset) = v_reg[1];
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * 2) = v_reg[2];
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * 3) = v_reg[3];
+#pragma unroll
+        for(int i = 0; i < v_reg_num; i++)
+        {
+            *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * i) = v_reg[i];
+        }
 
         __syncthreads();
 
-        _BF16x8_t vt_reg_gemm2[4];
-        vt_reg_gemm2[0] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset);
-        vt_reg_gemm2[1] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
-        vt_reg_gemm2[2] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
-        vt_reg_gemm2[3] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
+        _BF16x8_t vt_reg_gemm2[kt_reg_gemm0_vt_reg_gemm2_num];
+#pragma unroll
+        for(int i = 0; i < kt_reg_gemm0_vt_reg_gemm2_num; i++)
+        {
+            vt_reg_gemm2[i] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * i);
+        }
         
         __syncthreads();
 
@@ -830,8 +826,9 @@ struct FmhaBwdDQDKDVKernel
         const auto num_total_loop = integer_divide_ceil(seqlen_q_end - seqlen_q_start, kM0);
 
         // loading offset
-        int q_do_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_q;
-        int q_do_load_reg_offset = kargs.stride_q * 32;
+        constexpr int q_do_reg_rows = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
+        int q_do_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * num_threads_per_hd_global_load + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_q;
+        int q_do_load_reg_offset = kargs.stride_q * q_do_reg_rows;
 
         constexpr int st_acc_gemmk_offset = 4;
         
