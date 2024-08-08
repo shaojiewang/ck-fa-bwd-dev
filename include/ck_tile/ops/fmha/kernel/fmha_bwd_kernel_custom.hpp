@@ -23,7 +23,8 @@
 
 namespace ck_tile {
 
-#define GCN_MFMA_INSTR __builtin_amdgcn_mfma_f32_32x32x8bf16_1k
+#define GCN_MFMA_INSTR_32 __builtin_amdgcn_mfma_f32_32x32x8bf16_1k
+#define GCN_MFMA_INSTR_16 __builtin_amdgcn_mfma_f32_16x16x16bf16_1k
 
 template <typename TilePartitioner_,
           typename FmhaPipeline_,
@@ -67,6 +68,30 @@ struct FmhaBwdDQDKDVKernel
     static constexpr bool kHasDropout = FmhaDropout::IsDropout;
     static constexpr bool kIsStoreRandval  = FmhaDropout::IsStoreRandval;
     static constexpr bool kIsDeterministic = FmhaPipeline::kIsDeterministic;
+
+    // tile/warp
+    static constexpr ck_tile::index_t kM0        = FmhaPipeline::kM0;
+    static constexpr ck_tile::index_t kN0        = FmhaPipeline::kN0;
+    static constexpr ck_tile::index_t kK0        = FmhaPipeline::kK0;
+    static constexpr ck_tile::index_t kK1        = FmhaPipeline::kK1;
+    static constexpr ck_tile::index_t kK2        = FmhaPipeline::kK2;
+    static constexpr ck_tile::index_t kK3        = FmhaPipeline::kK3;
+    static constexpr ck_tile::index_t kK4        = FmhaPipeline::kK4;
+    static constexpr ck_tile::index_t kQKHeaddim = FmhaPipeline::kQKHeaddim;
+    static constexpr ck_tile::index_t kVHeaddim  = FmhaPipeline::kVHeaddim;
+
+    using BlockShape = typename FmhaPipeline::BlockFmhaShape;
+    using Gemm0Gemm2BlockWarps = typename BlockShape::Gemm0BlockWarps;
+    using Gemm1Gemm3BlockWarps = typename BlockShape::Gemm1BlockWarps;
+    using Gemm4BlockWarps = typename BlockShape::Gemm4BlockWarps;
+    using Gemm0Gemm2Gemm4WarpTile = typename BlockShape::Gemm0WarpTile;
+    using Gemm1Gemm3WarpTile = typename BlockShape::Gemm1WarpTile;
+
+    static constexpr ck_tile::index_t kGemm0Gemm2rm = Gemm0Gemm2BlockWarps::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm0Gemm2rn = Gemm0Gemm2BlockWarps::at(ck_tile::number<1>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3rm = Gemm1Gemm3BlockWarps::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3rn = Gemm1Gemm3BlockWarps::at(ck_tile::number<1>{});
+    
 
     // clang-format off
     template <typename T> struct t2s;
