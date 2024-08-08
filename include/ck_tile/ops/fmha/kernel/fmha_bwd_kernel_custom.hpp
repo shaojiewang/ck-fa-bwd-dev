@@ -97,6 +97,7 @@ struct FmhaBwdDQDKDVKernel
     static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpM = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<0>{});
     static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpN = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<1>{});
     static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpK = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<2>{});
+    static constexpr ck_tile::index_t kGemm4WarpK = kGemm0Gemm2Gemm4WarpK / 2;
     static constexpr ck_tile::index_t kGemm1Gemm3WarpM = Gemm1Gemm3WarpTile::at(ck_tile::number<0>{});
     static constexpr ck_tile::index_t kGemm1Gemm3WarpN = Gemm1Gemm3WarpTile::at(ck_tile::number<1>{});
     static constexpr ck_tile::index_t kGemm1Gemm3WarpK = Gemm1Gemm3WarpTile::at(ck_tile::number<2>{});
@@ -763,21 +764,24 @@ struct FmhaBwdDQDKDVKernel
        
         __syncthreads();
 
-        constexpr int kt_reg_gemm0_vt_reg_gemm2_num =  
-        _BF16x8_t kt_reg_to_gemm0[4];
+        constexpr int kt_reg_gemm0_vt_reg_gemm2_num = kGemm0Gemm2rm * kQKHeaddim * kN0 * sizeof(KDataType) / (kBlockSize * sizeof(_BF16x8_t));
+        _BF16x8_t kt_reg_to_gemm0[kt_reg_gemm0_vt_reg_gemm2_num];
         int wave_id = threadIdx.x / 64;
         int wave_lane_id = threadIdx.x % 64;
-        int k0_id = wave_lane_id / 32;
-        int n_id = wave_lane_id % 32;
-        int n_wave_repeat_id = wave_id % 4;
-        int k_smem_gemm0_offset = n_wave_repeat_id * 32 * (64 * 2 + q_do_padding) + n_id * (64 * 2 + q_do_padding) + k0_id * 16;
-        constexpr int k_smem_read_reg_offset = 32;
-        kt_reg_to_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset);
-        kt_reg_to_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
-        kt_reg_to_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
-        kt_reg_to_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
+        int k0_id = wave_lane_id / kGemm0Gemm2Gemm4WarpM;
+        int n_id = wave_lane_id % kGemm0Gemm2Gemm4WarpM;
+        int n_wave_repeat_id = wave_id % kGemm0Gemm2rn;
+        int k_smem_gemm0_offset = n_wave_repeat_id * kGemm0Gemm2Gemm4WarpN * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + n_id * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + k0_id * 16;
+        constexpr int k_smem_read_reg_offset = kGemm0Gemm2Gemm4WarpK * sizeof(KDataType);
 
-        float2 k_reg_to_gemm4[16];
+#pragma unroll
+        for(int i_kt_reg_gemm0 = 0; i_kt_reg_gemm0 < kt_reg_gemm0_vt_reg_gemm2_num; i_kt_reg_gemm0++)
+        {
+            kt_reg_to_gemm0[i_kt_reg_gemm0] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * i_kt_reg_gemm0);
+        }
+
+        constexpr int k_reg_gemm4_num = kGemm4rm * kM0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * sizeof(bfloat16x4));
+        bfloat16x4 k_reg_to_gemm4[k_reg_gemm4_num];
         unsigned short k_gemm4[4];
         int gemm4_n_wave_id = wave_id / 2;
         int k_smem_gemm4_offset = n_id * 2 + k0_id * (64 * 2 + q_do_padding) * 4 + gemm4_n_wave_id * 32 * 2;
