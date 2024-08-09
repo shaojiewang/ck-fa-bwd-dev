@@ -101,6 +101,7 @@ struct FmhaBwdDQDKDVKernel
     static constexpr ck_tile::index_t kGemm1Gemm3WarpM = Gemm1Gemm3WarpTile::at(ck_tile::number<0>{});
     static constexpr ck_tile::index_t kGemm1Gemm3WarpN = Gemm1Gemm3WarpTile::at(ck_tile::number<1>{});
     static constexpr ck_tile::index_t kGemm1Gemm3WarpK = Gemm1Gemm3WarpTile::at(ck_tile::number<2>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpKInst = kGemm1Gemm3WarpK / 2;
     
     // clang-format off
     template <typename T> struct t2s;
@@ -724,10 +725,12 @@ struct FmhaBwdDQDKDVKernel
         constexpr int32_t m0 = 0x05040100;
         constexpr int32_t m1 = 0x07060302;
 
+        constexpr int32_t kQKHeaddimBytes = kQKHeaddim * sizeof(KDataType);
+
         // prepare k and v_t in smem
-        constexpr int k_reg_num = kN0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * sizeof(float4));
-        constexpr int k_reg_row = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
-        constexpr int num_threads_per_hd_global_load = kQKHeaddim * sizeof(KDataType) / sizeof(float4);
+        constexpr int k_reg_num = kN0 * kQKHeaddimBytes / (kBlockSize * sizeof(float4));
+        constexpr int k_reg_row = kBlockSize * sizeof(float4) / kQKHeaddimBytes;
+        constexpr int num_threads_per_hd_global_load = kQKHeaddimBytes / sizeof(float4);
         constexpr int num_threads_per_hd_global_load_minus_1 = num_threads_per_hd_global_load - 1;
         float4 k_reg[k_reg_num];
         int kv_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * num_threads_per_hd_global_load + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_k;
@@ -843,17 +846,20 @@ struct FmhaBwdDQDKDVKernel
 #if 1
         const int ds_lds_write_offset = n_id * sizeof(KDataType) + k0_id * (kN0 * sizeof(KDataType) + ds_padding_bytes) * 4 + n_wave_repeat_id * kGemm0Gemm2Gemm4WarpM * sizeof(KDataType);
         constexpr int ds_lds_write_reg_offset = kN0 * sizeof(KDataType) + ds_padding_bytes;
-        constexpr int ds_lds_gemm_m_group_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * 8;
+        constexpr int ds_lds_gemm_m_group_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm4WarpK;
         constexpr int ds_lds_gemm_m_acc_reg_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm0Gemm2Gemm4WarpM;
 #endif
 
         // lds read offset
-        int q_gemm0_do_gemm2_offset = n_id * (64 * 2 + q_do_padding) + k0_id * 16;
-        constexpr int q_gemm0_do_gemm2_reg_offset = 32 * (64 * 2 + q_do_padding);
-        constexpr int q_gemm0_do_gemm2_gemmk_offset = 16 * 2;
-        int q_gemm3_do_gemm1_offset = n_id * 4 + k0_id * (64 * 2 + q_do_padding) * 4;
-        constexpr int q_gemm3_do_gemm1_reg_offset = 64 * 2 + q_do_padding;
-        constexpr int q_gemm3_do_gemm1_gemmk_offset = (64 * 2 + q_do_padding) * 8;
+        int q_gemm0_do_gemm2_offset = n_id * (kQKHeaddimBytes + q_do_padding) + k0_id * kGemm0Gemm2Gemm4WarpK;
+        constexpr int q_gemm0_do_gemm2_reg_rows = kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2rm;
+        constexpr int q_gemm0_do_gemm2_reg_offset = q_gemm0_do_gemm2_reg_rows * (kQKHeaddimBytes + q_do_padding);
+        constexpr int q_gemm0_do_gemm2_gemmk_offset = kGemm0Gemm2Gemm4WarpK * sizeof(KDataType);
+        constexpr int q_gemm3_do_gemm1_elements = kQKHeaddim / (kGemm1Gemm3WarpN * kGemm1Gemm3rn);
+        constexpr int q_gemm3_do_gemm1_elements_in_byte = q_gemm3_do_gemm1_elements * sizeof(KDataType);
+        int q_gemm3_do_gemm1_offset = n_id * q_gemm3_do_gemm1_elements_in_byte  + k0_id * (kQKHeaddimBytes + q_do_padding) * q_gemm3_do_gemm1_elements_in_byte;
+        constexpr int q_gemm3_do_gemm1_reg_offset = kQKHeaddimBytes + q_do_padding;
+        constexpr int q_gemm3_do_gemm1_gemmk_offset = (kQKHeaddimBytes + q_do_padding) * kGemm1Gemm3WarpKInst;
 
         // gemm4 ds offset
         int ds_gemm4_offset = n_id * (128 * 2 + ds_padding_bytes) + k0_id * 4 * 2;
