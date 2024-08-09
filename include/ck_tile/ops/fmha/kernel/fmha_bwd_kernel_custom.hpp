@@ -104,6 +104,9 @@ struct FmhaBwdDQDKDVKernel
     static constexpr ck_tile::index_t kGemm1Gemm3WarpK = Gemm1Gemm3WarpTile::at(ck_tile::number<2>{});
     static constexpr ck_tile::index_t kGemm1Gemm3WarpKInst = kGemm1Gemm3WarpK / 2;
     
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4AccNum = kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2Gemm4WarpN / 64;
+    static constexpr ck_tile::index_t kGemm2Gemm3AccNum = kGemm1Gemm3WarpM * kGemm1Gemm3WarpN / 64;
+
     static constexpr ck_tile::index_t kGemm0Gemm2KLoops = kQKHeaddim / kGemm0Gemm2Gemm4WarpK;
     static constexpr ck_tile::index_t kGemm1Gemm3KLoops = kN0 / kGemm1Gemm3WarpKInst;
     static constexpr ck_tile::index_t kGemm4KLoops = kN0 / kGemm4WarpK;
@@ -1017,26 +1020,21 @@ struct FmhaBwdDQDKDVKernel
 #endif
 
             // softmax
+            
             floatx4 lse_d[st_acc_num];
 #pragma unroll
             for(int i_pt = 0; i_pt < st_acc_num; i_pt++)
             {
 #pragma unroll
-                for(int i_pt_vec = 0; i_pt_vec < 16; i_pt_vec += 8)
+                for(int i_pt_vec = 0; i_pt_vec < kGemm0Gemm2Gemm4AccNum; i_pt_vec += 4)
                 {
                     lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
-                    lse_smem += lse_d_reg_offset;
-                    lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
                     lse_smem += lse_d_reg_offset;
 
                     st_acc[i_pt][0 + i_pt_vec] = exp2(scale * st_acc[i_pt][0 + i_pt_vec] - lse_d[0][0]);
                     st_acc[i_pt][1 + i_pt_vec] = exp2(scale * st_acc[i_pt][1 + i_pt_vec] - lse_d[0][1]);
                     st_acc[i_pt][2 + i_pt_vec] = exp2(scale * st_acc[i_pt][2 + i_pt_vec] - lse_d[0][2]);
                     st_acc[i_pt][3 + i_pt_vec] = exp2(scale * st_acc[i_pt][3 + i_pt_vec] - lse_d[0][3]);
-                    st_acc[i_pt][4 + i_pt_vec] = exp2(scale * st_acc[i_pt][4 + i_pt_vec] - lse_d[1][0]);
-                    st_acc[i_pt][5 + i_pt_vec] = exp2(scale * st_acc[i_pt][5 + i_pt_vec] - lse_d[1][1]);
-                    st_acc[i_pt][6 + i_pt_vec] = exp2(scale * st_acc[i_pt][6 + i_pt_vec] - lse_d[1][2]);
-                    st_acc[i_pt][7 + i_pt_vec] = exp2(scale * st_acc[i_pt][7 + i_pt_vec] - lse_d[1][3]);
                 }    
             }
 
@@ -1124,10 +1122,10 @@ struct FmhaBwdDQDKDVKernel
 #if 1
             // ds
 #pragma unroll
-            for(int i_dpt = 0; i_dpt < 2; i_dpt++)
+            for(int i_dpt = 0; i_dpt < st_acc_num; i_dpt++)
             {
 #pragma unroll
-                for(int i_dpt_vec = 0; i_dpt_vec < 16; i_dpt_vec += 8)
+                for(int i_dpt_vec = 0; i_dpt_vec < ; i_dpt_vec += 8)
                 {
                     lse_d[0] = *reinterpret_cast<floatx4*>(d_smem + lse_d_lds_read_offset);
                     d_smem += lse_d_reg_offset;
