@@ -862,14 +862,15 @@ struct FmhaBwdDQDKDVKernel
         constexpr int q_gemm3_do_gemm1_gemmk_offset = (kQKHeaddimBytes + q_do_padding) * kGemm1Gemm3WarpKInst;
 
         // gemm4 ds offset
-        int ds_gemm4_offset = n_id * (128 * 2 + ds_padding_bytes) + k0_id * 4 * 2;
-        const int ds_gemm4_m_wave_offset = (wave_id % 2) * (128 * 2 + ds_padding_bytes) * 32;
+        int ds_gemm4_offset = n_id * (kN0 * sizeof(KDataType) + ds_padding_bytes) + k0_id * 4 * sizeof(KDataType);
+        const int ds_gemm4_m_wave_offset = (wave_id % kGemm4rm) * (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm0Gemm2Gemm4WarpM;
         ds_gemm4_offset += ds_gemm4_m_wave_offset;
-        constexpr int ds_gemm4_kiter_offset = 8 * 2;
+        constexpr int ds_gemm4_kiter_offset = kGemm4WarpK * sizeof(KDataType);
 
         // lse and d hbm offset and lds write read offset
         // constexpr int lse_d_step_offset = 64 * sizeof(float);
-        constexpr int lse_d_reg_offset = 8 * sizeof(float);
+        constexpr int gemm4_groups = 64 / kGemm0Gemm2Gemm4WarpM;
+        constexpr int lse_d_reg_offset = 4 * gemm4_groups * sizeof(float);
         int lse_d_hbm_offset = threadIdx.x;
         int lse_d_lds_write_offset = threadIdx.x * sizeof(float);
         int lse_d_lds_read_offset = k0_id * 4 * sizeof(float);
@@ -879,13 +880,21 @@ struct FmhaBwdDQDKDVKernel
         auto scale = kargs.scale;
 
         // acc clear
-        CVecType dv_acc[2];
-        dv_acc[0] = {0};
-        dv_acc[1] = {0};
+        constexpr int dv_acc_num = kVHeaddim * kN0 / (kGemm1Gemm3rm * kGemm1Gemm3rn * kGemm1Gemm3WarpM * kGemm1Gemm3WarpN);
+        CVecType dv_acc[dv_acc_num];
+#pragma unroll
+        for(int i = 0; i < dv_acc_num; i++)
+        {
+            dv_acc[i] = {0};
+        }
         
-        CVecType dk_acc[2];
-        dk_acc[0] = {0};
-        dk_acc[1] = {0};
+        constexpr int dk_acc_num = kQKHeaddim * kN0 / (kGemm1Gemm3rm * kGemm1Gemm3rn * kGemm1Gemm3WarpM * kGemm1Gemm3WarpN);
+        CVecType dk_acc[dk_acc_num];
+#pragma unroll
+        for(int i = 0; i < dk_acc_num; i++)
+        {
+            dk_acc[i] = {0};
+        }
        
         float4 q_reg[2];
         float4 do_reg[2];
