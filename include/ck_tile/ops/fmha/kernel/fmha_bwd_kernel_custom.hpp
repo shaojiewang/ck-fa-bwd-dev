@@ -1017,56 +1017,28 @@ struct FmhaBwdDQDKDVKernel
 #endif
 
             // softmax
-            floatx4 lse_d[2];
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset);
+            floatx4 lse_d[st_acc_num];
+#pragma unroll
+            for(int i_pt = 0; i_pt < st_acc_num; i_pt++)
+            {
+#pragma unroll
+                for(int i_pt_vec = 0; i_pt_vec < 16; i_pt_vec += 8)
+                {
+                    lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
+                    lse_smem += lse_d_reg_offset;
+                    lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
+                    lse_smem += lse_d_reg_offset;
 
-            st_acc[0][0] = exp2(scale * st_acc[0][0] - lse_d[0][0]);
-#if 1
-            st_acc[0][1] = exp2(scale * st_acc[0][1] - lse_d[0][1]);
-            st_acc[0][2] = exp2(scale * st_acc[0][2] - lse_d[0][2]);
-            st_acc[0][3] = exp2(scale * st_acc[0][3] - lse_d[0][3]);
-            st_acc[0][4] = exp2(scale * st_acc[0][4] - lse_d[1][0]);
-            st_acc[0][5] = exp2(scale * st_acc[0][5] - lse_d[1][1]);
-            st_acc[0][6] = exp2(scale * st_acc[0][6] - lse_d[1][2]);
-            st_acc[0][7] = exp2(scale * st_acc[0][7] - lse_d[1][3]);
-
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 2);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 3);
-
-            st_acc[0][8]  = exp2(scale * st_acc[0][8]  - lse_d[0][0]);
-            st_acc[0][9]  = exp2(scale * st_acc[0][9]  - lse_d[0][1]);
-            st_acc[0][10] = exp2(scale * st_acc[0][10] - lse_d[0][2]);
-            st_acc[0][11] = exp2(scale * st_acc[0][11] - lse_d[0][3]);
-            st_acc[0][12] = exp2(scale * st_acc[0][12] - lse_d[1][0]);
-            st_acc[0][13] = exp2(scale * st_acc[0][13] - lse_d[1][1]);
-            st_acc[0][14] = exp2(scale * st_acc[0][14] - lse_d[1][2]);
-            st_acc[0][15] = exp2(scale * st_acc[0][15] - lse_d[1][3]);
-
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 4);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 5);
-
-            st_acc[1][0] = exp2(scale * st_acc[1][0] - lse_d[0][0]);
-            st_acc[1][1] = exp2(scale * st_acc[1][1] - lse_d[0][1]);
-            st_acc[1][2] = exp2(scale * st_acc[1][2] - lse_d[0][2]);
-            st_acc[1][3] = exp2(scale * st_acc[1][3] - lse_d[0][3]);
-            st_acc[1][4] = exp2(scale * st_acc[1][4] - lse_d[1][0]);
-            st_acc[1][5] = exp2(scale * st_acc[1][5] - lse_d[1][1]);
-            st_acc[1][6] = exp2(scale * st_acc[1][6] - lse_d[1][2]);
-            st_acc[1][7] = exp2(scale * st_acc[1][7] - lse_d[1][3]);
-
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 6);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 7);
-
-            st_acc[1][8]  = exp2(scale * st_acc[1][8]  - lse_d[0][0]);
-            st_acc[1][9]  = exp2(scale * st_acc[1][9]  - lse_d[0][1]);
-            st_acc[1][10] = exp2(scale * st_acc[1][10] - lse_d[0][2]);
-            st_acc[1][11] = exp2(scale * st_acc[1][11] - lse_d[0][3]);
-            st_acc[1][12] = exp2(scale * st_acc[1][12] - lse_d[1][0]);
-            st_acc[1][13] = exp2(scale * st_acc[1][13] - lse_d[1][1]);
-            st_acc[1][14] = exp2(scale * st_acc[1][14] - lse_d[1][2]);
-#endif
-            st_acc[1][15] = exp2(scale * st_acc[1][15] - lse_d[1][3]);
+                    st_acc[i_pt][0 + i_pt_vec] = exp2(scale * st_acc[i_pt][0 + i_pt_vec] - lse_d[0][0]);
+                    st_acc[i_pt][1 + i_pt_vec] = exp2(scale * st_acc[i_pt][1 + i_pt_vec] - lse_d[0][1]);
+                    st_acc[i_pt][2 + i_pt_vec] = exp2(scale * st_acc[i_pt][2 + i_pt_vec] - lse_d[0][2]);
+                    st_acc[i_pt][3 + i_pt_vec] = exp2(scale * st_acc[i_pt][3 + i_pt_vec] - lse_d[0][3]);
+                    st_acc[i_pt][4 + i_pt_vec] = exp2(scale * st_acc[i_pt][4 + i_pt_vec] - lse_d[1][0]);
+                    st_acc[i_pt][5 + i_pt_vec] = exp2(scale * st_acc[i_pt][5 + i_pt_vec] - lse_d[1][1]);
+                    st_acc[i_pt][6 + i_pt_vec] = exp2(scale * st_acc[i_pt][6 + i_pt_vec] - lse_d[1][2]);
+                    st_acc[i_pt][7 + i_pt_vec] = exp2(scale * st_acc[i_pt][7 + i_pt_vec] - lse_d[1][3]);
+                }    
+            }
 
             // gemm1
             bfloat16x4 pt_reg_gemm1;
