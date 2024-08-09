@@ -727,7 +727,7 @@ struct FmhaBwdDQDKDVKernel
         {
             bfloat16x4 xy[2];
         } _BF16x8_t;
-        using CVecType = ext_vector_t<float, 16>;
+        using CVecType = ext_vector_t<float, kGemm0Gemm2Gemm4AccNum>;
 
         // imm number
         constexpr int32_t m0 = 0x05040100;
@@ -1039,16 +1039,18 @@ struct FmhaBwdDQDKDVKernel
             }
 
             // gemm1
+            constexpr int do_gemm1_q_gemm3_reg_num = 2;
+            constexpr int gemm1_gemm3_k_inner_loop = kM0 / (st_acc_num * kGemm1Gemm3WarpKInst);
             bfloat16x4 pt_reg_gemm1;
             floatx4 do_reg_gemm1_tmp;
-            uint2 do_reg_transpose_gemm1[2];
-            bfloat16x4 do_reg_gemm1[2];
+            uint2 do_reg_transpose_gemm1[do_gemm1_q_gemm3_reg_num];
+            bfloat16x4 do_reg_gemm1[do_gemm1_q_gemm3_reg_num];
 
 #pragma unroll
-            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < 2; i_st_acc_reg_k++)
+            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < st_acc_num; i_st_acc_reg_k++)
             {
 #pragma unroll
-                for(int i_st_acc = 0; i_st_acc < 4; i_st_acc++)
+                for(int i_st_acc = 0; i_st_acc < gemm1_gemm3_k_inner_loop; i_st_acc++)
                 {
 #if 1
                     do_reg_gemm1_tmp[0] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
@@ -1077,46 +1079,47 @@ struct FmhaBwdDQDKDVKernel
                 }
             }
 
-            do_smem -= q_gemm3_do_gemm1_gemmk_offset * 8;
+            do_smem -= q_gemm3_do_gemm1_gemmk_offset * (st_acc_num * gemm1_gemm3_k_inner_loop);
 
             // gemm 2
-            CVecType dpt_acc[2];
-            dpt_acc[0] = {0};
-            dpt_acc[1] = {0};
+            CVecType dpt_acc[st_acc_num];
+#pragma unroll
+            for(int i = 0; i < st_acc_num; i++)
+            {
+                dpt_acc[i] = {0};
+            }
 #if 1
-            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset);
-            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
-            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
-            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
+#pragma unroll
+            for(int i = 0; i < q_gemm0_reg_num; i++)
+            {
+                q_reg_gemm0[i] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * i);
+            }
 #endif
 
 #if 1
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[1], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[1], 0, 0, 0);
+#pragma unroll
+            for(int i = 0; i < kGemm0Gemm2KLoops; i++)
+            {
+                dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[0], vt_reg_gemm2[i].xy[0], dpt_acc[0], 0, 0, 0);
+                dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[1], vt_reg_gemm2[i].xy[1], dpt_acc[0], 0, 0, 0);
+            }
 #endif
 
 #if 1
-            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
-            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
-            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
-            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
+#pragma unroll
+            for(int i = 0; i < q_gemm0_reg_num; i++)
+            {
+                q_reg_gemm0[i] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * i);
+            }
 #endif
 
 #if 1
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[0].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[1].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[1], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[2].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[3].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[1], 0, 0, 0);
+#pragma unroll
+            for(int i = 0; i < kGemm0Gemm2KLoops; i++)
+            {
+                dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[0], vt_reg_gemm2[i].xy[0], dpt_acc[1], 0, 0, 0);
+                dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[1], vt_reg_gemm2[i].xy[1], dpt_acc[1], 0, 0, 0);
+            }
 #endif
 
 #if 1
