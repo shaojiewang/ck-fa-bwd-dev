@@ -106,6 +106,7 @@ struct FmhaBwdDQDKDVKernel
     
     static constexpr ck_tile::index_t kGemm0Gemm2Gemm4AccNum = kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2Gemm4WarpN / 64;
     static constexpr ck_tile::index_t kGemm2Gemm3AccNum = kGemm1Gemm3WarpM * kGemm1Gemm3WarpN / 64;
+    static constexpr ck_tile::index_t kGemm4GroupM = kGemm0Gemm2Gemm4WarpM / kGemm0Gemm2Gemm4AccNum * 4;
 
     static constexpr ck_tile::index_t kGemm0Gemm2KLoops = kQKHeaddim / kGemm0Gemm2Gemm4WarpK;
     static constexpr ck_tile::index_t kGemm1Gemm3KLoops = kN0 / kGemm1Gemm3WarpKInst;
@@ -1143,10 +1144,10 @@ struct FmhaBwdDQDKDVKernel
 
             // gemm 3
 #pragma unroll
-            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < 2; i_st_acc_reg_k++)
+            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < st_acc_num; i_st_acc_reg_k++)
             {
 #pragma unroll
-                for(int i_st_acc = 0; i_st_acc < 4; i_st_acc++)
+                for(int i_st_acc = 0; i_st_acc < gemm1_gemm3_k_inner_loop; i_st_acc++)
                 {
 #if 1 
                     do_reg_gemm1_tmp[0] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset);
@@ -1183,58 +1184,72 @@ struct FmhaBwdDQDKDVKernel
             }
 
             // gemm 4
-            bfloat16x4 dp_reg_gemm4[2];
-            st_acc[0] = {0};
+            constexpr int dp_gemm4_reg_num = 2;
+            constexpr int dq_acc_num = kQKHeaddim * kM0 / (kGemm4rm * kGemm4rn * kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2Gemm4WarpN);
+            bfloat16x4 dp_reg_gemm4[dp_gemm4_reg_num];
+#pragma unroll
+            for(int i = 0; i < dq_acc_num; i++)
+            {
+                st_acc[st_acc_num - dq_acc_num + i] = {0};
+            }
 
             __syncthreads();
-            int i_k_gemmk_gemm4 = 0;
 
+            int i_k_gemmk_gemm4 = 0;
 #pragma unroll
-            for(int i_gemm4_k = 0; i_gemm4_k < 128; i_gemm4_k += 16)
+            for(int i_dq_acc = 0; i_dq_acc < dq_acc_num; i_dq_acc++)
             {
+#pragma unroll
+                for(int i_gemm4_k = 0; i_gemm4_k < kN0; i_gemm4_k += kGemm0Gemm2Gemm4WarpK)
+                {
 #if 1
-                dp_reg_gemm4[0] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
-                ds_smem += ds_gemm4_kiter_offset;
-                dp_reg_gemm4[1] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
-                ds_smem += ds_gemm4_kiter_offset;
+                    dp_reg_gemm4[0] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
+                    ds_smem += ds_gemm4_kiter_offset;
+                    dp_reg_gemm4[1] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
+                    ds_smem += ds_gemm4_kiter_offset;
 #else
-                dp_reg_gemm4[0] = {1};
-                ds_smem += ds_gemm4_kiter_offset + ds_gemm4_offset;
-                dp_reg_gemm4[1] = {1};
-                ds_smem += ds_gemm4_kiter_offset;
+                    dp_reg_gemm4[0] = {1};
+                    ds_smem += ds_gemm4_kiter_offset + ds_gemm4_offset;
+                    dp_reg_gemm4[1] = {1};
+                    ds_smem += ds_gemm4_kiter_offset;
 
 #endif
                 
-                st_acc[0] = GCN_MFMA_INSTR_32(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
-                i_k_gemmk_gemm4++;
-                st_acc[0] = GCN_MFMA_INSTR_32(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
-                i_k_gemmk_gemm4++;
+                    st_acc[st_acc_num - dq_acc_num + i_dq_acc] = GCN_MFMA_INSTR_32(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[st_acc_num - dq_acc_num + i_dq_acc], 0, 0, 0);
+                    i_k_gemmk_gemm4++;
+                    st_acc[st_acc_num - dq_acc_num + i_dq_acc] = GCN_MFMA_INSTR_32(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[st_acc_num - dq_acc_num + i_dq_acc], 0, 0, 0);
+                    i_k_gemmk_gemm4++;
+                }
             }
 
 #pragma unroll
-            for(int i_dq_acc = 0; i_dq_acc < 4; i_dq_acc++)
+            for(int i_dq_acc = 0; i_dq_acc < dq_acc_num; i_dq_acc++)
             {
+#pragma unroll
+                for(int i_dq_vec = 0; i_dq_vec < (kGemm0Gemm2Gemm4AccNum / 4); i_dq_vec++)
+                {
 #if 0
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 2] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 2] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
 #else
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale);
-                dq_acc_ptr_tmp += kargs.stride_q;
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale);
-                dq_acc_ptr_tmp += kargs.stride_q;
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 2] * kargs.raw_scale);
-                dq_acc_ptr_tmp += kargs.stride_q;
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale);
-                dq_acc_ptr_tmp += 5 * kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 0] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 1] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 2] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 3] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += (kGemm4GroupM - 3) * kargs.stride_q;
 #endif
+                }
+                dq_acc_ptr_tmp += kGemm0Gemm2Gemm4WarpM * (kGemm4rm - 1) * kargs.stride_q;
             }
-            dq_acc_ptr_tmp += 32 * kargs.stride_q;
             
             __syncthreads();
 
