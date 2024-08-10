@@ -26,6 +26,33 @@ namespace ck_tile {
 #define GCN_MFMA_INSTR_32 __builtin_amdgcn_mfma_f32_32x32x8bf16_1k
 #define GCN_MFMA_INSTR_16 __builtin_amdgcn_mfma_f32_16x16x16bf16_1k
 
+template <ck_tile::index_t InstM,
+          ck_tile::index_t InstN,
+          ck_tile::index_t InstK>
+struct GcnMfmaInstr;
+
+template <>
+struct GcnMfmaInstr<32, 32, 8>
+{
+    using CVecType = float __attribute__((ext_vector_type(16)));// __attribute__((vector_size(16 * sizeof(float)))) float;
+    using ABVecType = __attribute__((vector_size(4 * sizeof(bf16_t)))) bf16_t;
+    __device__ static void mfma_run(const ABVecType& a, const ABVecType& b, CVecType& c)
+    {
+        c = GCN_MFMA_INSTR_32(a, b, c, 0, 0, 0);
+    }
+};
+
+template <>
+struct GcnMfmaInstr<16, 16, 16>
+{
+    using CVecType = float __attribute__((ext_vector_type(4)));// __attribute__((vector_size(16 * sizeof(float)))) float;
+    using ABVecType = __attribute__((vector_size(4 * sizeof(bf16_t)))) bf16_t;
+    __device__ static void mfma_run(const ABVecType& a, const ABVecType& b, CVecType& c)
+    {
+        c = GCN_MFMA_INSTR_16(a, b, c, 0, 0, 0);
+    }
+};
+
 template <typename TilePartitioner_,
           typename FmhaPipeline_,
           typename KGradEpiloguePipeline_,
@@ -104,6 +131,9 @@ struct FmhaBwdDQDKDVKernel
     static constexpr ck_tile::index_t kGemm1Gemm3WarpK = Gemm1Gemm3WarpTile::at(ck_tile::number<2>{});
     static constexpr ck_tile::index_t kGemm1Gemm3WarpKInst = kGemm1Gemm3WarpK / 2;
     
+    using Gemm0Gemm2Gemm4MfmaInstr = GcnMfmaInstr<kGemm0Gemm2Gemm4WarpM, kGemm0Gemm2Gemm4WarpN, kGemm0Gemm2Gemm4WarpKInst>;
+    using Gemm1Gemm3MfmaInstr = GcnMfmaInstr<kGemm1Gemm3WarpM, kGemm1Gemm3WarpN, kGemm1Gemm3WarpKInst>;
+
     static constexpr ck_tile::index_t kGemm0Gemm2Gemm4AccNum = kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2Gemm4WarpN / 64;
     static constexpr ck_tile::index_t kGemm1Gemm3AccNum = kGemm1Gemm3WarpM * kGemm1Gemm3WarpN / 64;
     static constexpr ck_tile::index_t kGemm4GroupM = kGemm0Gemm2Gemm4WarpM / kGemm0Gemm2Gemm4AccNum * 4;
@@ -998,8 +1028,8 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
             for(int i = 0; i < kGemm0Gemm2KLoops; i++)
             {
-                st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[0], kt_reg_to_gemm0[i].xy[0], st_acc[0], 0, 0, 0);
-                st_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[1], kt_reg_to_gemm0[i].xy[1], st_acc[0], 0, 0, 0);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[0], kt_reg_to_gemm0[i].xy[0], st_acc[0]);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[1], kt_reg_to_gemm0[i].xy[1], st_acc[0]);
             }
 #endif
 
@@ -1015,8 +1045,8 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
             for(int i = 0; i < kGemm0Gemm2KLoops; i++)
             {
-                st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[0], kt_reg_to_gemm0[i].xy[0], st_acc[1], 0, 0, 0);
-                st_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[1], kt_reg_to_gemm0[i].xy[1], st_acc[1], 0, 0, 0);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[0], kt_reg_to_gemm0[i].xy[0], st_acc[1]);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[1], kt_reg_to_gemm0[i].xy[1], st_acc[1]);
             }
 #endif
 
@@ -1072,9 +1102,9 @@ struct FmhaBwdDQDKDVKernel
 
                     do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
                     do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
-            
-                    dv_acc[0] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
-                    dv_acc[1] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
+           
+                    Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0]);
+                    Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1]);
 
                     do_smem += q_gemm3_do_gemm1_gemmk_offset;
                 }
@@ -1101,8 +1131,8 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
             for(int i = 0; i < kGemm0Gemm2KLoops; i++)
             {
-                dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[0], vt_reg_gemm2[i].xy[0], dpt_acc[0], 0, 0, 0);
-                dpt_acc[0] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[1], vt_reg_gemm2[i].xy[1], dpt_acc[0], 0, 0, 0);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[0], vt_reg_gemm2[i].xy[0], dpt_acc[0]);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[1], vt_reg_gemm2[i].xy[1], dpt_acc[0]);
             }
 #endif
 
@@ -1118,8 +1148,8 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
             for(int i = 0; i < kGemm0Gemm2KLoops; i++)
             {
-                dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[0], vt_reg_gemm2[i].xy[0], dpt_acc[1], 0, 0, 0);
-                dpt_acc[1] = GCN_MFMA_INSTR_32(q_reg_gemm0[i].xy[1], vt_reg_gemm2[i].xy[1], dpt_acc[1], 0, 0, 0);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[0], vt_reg_gemm2[i].xy[0], dpt_acc[1]);
+                Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[1], vt_reg_gemm2[i].xy[1], dpt_acc[1]);
             }
 #endif
 
@@ -1168,9 +1198,9 @@ struct FmhaBwdDQDKDVKernel
 
                     do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
                     do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
-            
-                    dk_acc[0] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0], 0, 0, 0);
-                    dk_acc[1] = GCN_MFMA_INSTR_32(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1], 0, 0, 0);
+
+                    Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0]);
+                    Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1]);
 
 #if 1
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k) = pt_reg_gemm1[0];
@@ -1214,10 +1244,10 @@ struct FmhaBwdDQDKDVKernel
                     ds_smem += ds_gemm4_kiter_offset;
 
 #endif
-                
-                    st_acc[st_acc_num - dq_acc_num + i_dq_acc] = GCN_MFMA_INSTR_32(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[st_acc_num - dq_acc_num + i_dq_acc], 0, 0, 0);
+
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[st_acc_num - dq_acc_num + i_dq_acc]);
                     i_k_gemmk_gemm4++;
-                    st_acc[st_acc_num - dq_acc_num + i_dq_acc] = GCN_MFMA_INSTR_32(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[st_acc_num - dq_acc_num + i_dq_acc], 0, 0, 0);
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[st_acc_num - dq_acc_num + i_dq_acc]);
                     i_k_gemmk_gemm4++;
                 }
             }
