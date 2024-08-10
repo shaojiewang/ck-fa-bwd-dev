@@ -105,7 +105,7 @@ struct FmhaBwdDQDKDVKernel
     static constexpr ck_tile::index_t kGemm1Gemm3WarpKInst = kGemm1Gemm3WarpK / 2;
     
     static constexpr ck_tile::index_t kGemm0Gemm2Gemm4AccNum = kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2Gemm4WarpN / 64;
-    static constexpr ck_tile::index_t kGemm2Gemm3AccNum = kGemm1Gemm3WarpM * kGemm1Gemm3WarpN / 64;
+    static constexpr ck_tile::index_t kGemm1Gemm3AccNum = kGemm1Gemm3WarpM * kGemm1Gemm3WarpN / 64;
     static constexpr ck_tile::index_t kGemm4GroupM = kGemm0Gemm2Gemm4WarpM / kGemm0Gemm2Gemm4AccNum * 4;
 
     static constexpr ck_tile::index_t kGemm0Gemm2KLoops = kQKHeaddim / kGemm0Gemm2Gemm4WarpK;
@@ -1255,7 +1255,7 @@ struct FmhaBwdDQDKDVKernel
 
             float4 q_do_swap_tmp;
 #pragma unroll
-            for(int i_qdo_reg = 0; i_qdo_reg < 2; i_qdo_reg++)
+            for(int i_qdo_reg = 0; i_qdo_reg < q_do_global_num; i_qdo_reg++)
             {
                 // q reg
                 q_do_swap_tmp = q_reg_tmp[i_qdo_reg];
@@ -1273,19 +1273,20 @@ struct FmhaBwdDQDKDVKernel
         } while(i_total_loops < (num_total_loop - 0));
 
         // write out dv
+        constexpr int dv_dk_acc_vec_size = kVHeaddim / (kGemm1Gemm3rn * kGemm1Gemm3WarpN);
         const int& stride_v_seq = kargs.stride_v;
-        int dv_hbm_offset = n_id * 2 + k0_id * stride_v_seq * 4;
+        int dv_hbm_offset = n_id * dv_dk_acc_vec_size + k0_id * stride_v_seq * 4;
 
         // const int dv_hbm_reg_offset = stride_v_seq;
         // const int dv_hbm_a_group_offset = stride_v_seq * 8;
-        const int wave_offset_gemm1_gemm3 = wave_id * 32 * stride_v_seq;
+        const int wave_offset_gemm1_gemm3 = wave_id * kGemm1Gemm3WarpM * stride_v_seq;
         dv_hbm_offset += wave_offset_gemm1_gemm3;
         const int reg_offset_gemm1_gemm3 = stride_v_seq;
-        const int group_offset_gemm1_gemm3 = stride_v_seq * 8;
+        const int group_offset_gemm1_gemm3 = stride_v_seq * (kGemm1Gemm3WarpM / kGemm1Gemm3AccNum) * 4;
         
         dv_ptr += i_n0 * kargs.stride_k;
 #pragma unroll
-        for (int i_dv = 0; i_dv < 4; i_dv++)
+        for (int i_dv = 0; i_dv < (kGemm1Gemm3AccNum / 4); i_dv++)
         {
             uint32_t dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4]), m1);
             char* dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv);
@@ -1302,12 +1303,15 @@ struct FmhaBwdDQDKDVKernel
         }
 
         // dk = dk * scale
-        dk_acc[0] *= kargs.raw_scale;
-        dk_acc[1] *= kargs.raw_scale;
+#pragma unroll
+        for(int i = 0; i < dk_acc_num; i++)
+        {
+            dk_acc[i] *= kargs.raw_scale;
+        }
         
         dk_ptr += i_n0 * kargs.stride_k;
 #pragma unroll
-        for (int i_dk = 0; i_dk < 4; i_dk++)
+        for (int i_dk = 0; i_dk < (kGemm1Gemm3AccNum / 4); i_dk++)
         {
             uint32_t dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4]), m1);
             char* dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk);
