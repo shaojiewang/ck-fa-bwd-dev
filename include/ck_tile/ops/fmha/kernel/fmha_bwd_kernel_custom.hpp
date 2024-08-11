@@ -1036,6 +1036,18 @@ struct FmhaBwdDQDKDVKernel
             }
 #endif
 
+            asm volatile("s_nop 64\n");
+            printf("thread=%d, q_reg_gemm0[0].xy[0]=[%f,%f,%f,%f], kt_reg_to_gemm0[0].xy[0]=[%f, %f, %f, %f]\n",
+                type_convert<int>(threadIdx.x),
+                type_convert<float>(q_reg_gemm0[0].xy[0][0]),
+                type_convert<float>(q_reg_gemm0[0].xy[0][1]),
+                type_convert<float>(q_reg_gemm0[0].xy[0][2]),
+                type_convert<float>(q_reg_gemm0[0].xy[0][3]),
+                type_convert<float>(kt_reg_to_gemm0[0].xy[0][0]),
+                type_convert<float>(kt_reg_to_gemm0[0].xy[0][1]),
+                type_convert<float>(kt_reg_to_gemm0[0].xy[0][2]),
+                type_convert<float>(kt_reg_to_gemm0[0].xy[0][3]));
+
 #if 1
 #pragma unroll
             for(int i = 0; i < q_gemm0_reg_num; i++)
