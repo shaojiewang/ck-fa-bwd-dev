@@ -1082,6 +1082,17 @@ struct FmhaBwdDQDKDVKernel
                 }    
             }
 
+            if(threadIdx.x == 0)
+            {
+                printf("thread=%d, st_acc[0]=[%f,%f,%f,%f]\n",
+                    type_convert<int>(threadIdx.x),
+                    st_acc[0][0],
+                    st_acc[0][1],
+                    st_acc[0][2],
+                    st_acc[0][3]);
+                
+            }
+
             // gemm1
             constexpr int do_gemm1_q_gemm3_reg_num = 2;
             constexpr int gemm1_gemm3_k_inner_loop = kM0 / (st_acc_num * kGemm1Gemm3WarpKInst);
@@ -1122,6 +1133,15 @@ struct FmhaBwdDQDKDVKernel
                     do_smem += q_gemm3_do_gemm1_gemmk_offset;
                 }
             }
+
+#if 0
+            printf("thread=%d, dv_acc[0]=[%f,%f,%f,%f]\n",
+                type_convert<int>(threadIdx.x),
+                dv_acc[0][0],
+                dv_acc[0][1],
+                dv_acc[0][2],
+                dv_acc[0][3]);
+#endif
 
             do_smem -= q_gemm3_do_gemm1_gemmk_offset * (st_acc_num * gemm1_gemm3_k_inner_loop);
 
