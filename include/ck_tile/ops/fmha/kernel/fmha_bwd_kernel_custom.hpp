@@ -768,11 +768,12 @@ struct FmhaBwdDQDKDVKernel
 
         // prepare k and v_t in smem
         constexpr int k_reg_num = kN0 * kQKHeaddimBytes / (kBlockSize * sizeof(float4));
+        constexpr int kv_vec_global = sizeof(float4) / sizeof(KDataType);
         constexpr int k_reg_row = kBlockSize * sizeof(float4) / kQKHeaddimBytes;
         constexpr int num_threads_per_hd_global_load = kQKHeaddimBytes / sizeof(float4);
         constexpr int num_threads_per_hd_global_load_minus_1 = num_threads_per_hd_global_load - 1;
         float4 k_reg[k_reg_num];
-        int kv_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * num_threads_per_hd_global_load + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_k;
+        int kv_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * kv_vec_global + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_k;
         int kv_reg_offset = kargs.stride_k * k_reg_row;
 
 #pragma unroll
@@ -784,7 +785,7 @@ struct FmhaBwdDQDKDVKernel
 
         constexpr int v_reg_num = kN0 * kVHeaddim * sizeof(VDataType) / (kBlockSize * sizeof(float4));
         float4 v_reg[v_reg_num];
-        
+
 #pragma unroll
         for(int i_v_reg = 0; i_v_reg < v_reg_num; i_v_reg++)
         {
@@ -875,9 +876,11 @@ struct FmhaBwdDQDKDVKernel
         constexpr int st_acc_gemmk_offset = 4;
         
         // hbm store offset
+#if 1 //DQ_ATOMICADD
         int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
         const int dq_acc_wave_offset = (wave_id / kGemm4rm) * kGemm0Gemm2Gemm4WarpN + (wave_id % kGemm4rm) * kGemm0Gemm2Gemm4WarpM * kargs.stride_q;
         dq_acc_offset += dq_acc_wave_offset;
+#endif
 
         // lds write offset
         // gemm4 ds offset
@@ -2247,6 +2250,8 @@ struct FmhaBwdConvertQGradKernel
         }
         else
         {
+
+#if 0
             const AccDataType* dq_acc_ptr =
                 reinterpret_cast<const AccDataType*>(kargs.dq_acc_ptr) +
                 static_cast<long_index_t>(i_nhead) * (kargs.nhead_stride_dq) + batch_offset_dq;
@@ -2263,6 +2268,11 @@ struct FmhaBwdConvertQGradKernel
             float2 dq_reg[dq_unroll];
 
             char* dq_ptr_tmp;
+
+            if(threadIdx.x == 0)
+            {
+                printf("hhhh\n");
+            }
 
             for(int i = 0; i < num_head_q; i += 16 * dq_unroll)
             {
@@ -2286,8 +2296,9 @@ struct FmhaBwdConvertQGradKernel
                     reg_offset += 16 * 64;
                 }
             }
-
-            // FmhaBwdConvertQGrad{}(dq_acc_dram_window, dq_dram_window);
+#else
+            FmhaBwdConvertQGrad{}(dq_acc_dram_window, dq_dram_window);
+#endif
         }
     }
 };
