@@ -980,28 +980,21 @@ struct FmhaBwdDQDKDVKernel
             do_reg[i] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
             do_ptr += q_do_load_reg_offset;
         }
+
+        float lse_reg = 0, d_reg = 0, lse_reg_tmp = 0, d_reg_tmp = 0;
+        lse_reg = threadIdx.x < kM0 ? lse_raw[lse_d_hbm_offset] : 0;
+        lse_raw += kM0;
+        d_reg = threadIdx.x < kM0 ? d_raw[lse_d_hbm_offset] : 0;
+        d_raw += kM0;
+
         
         // core loop
         do
         {
-            // lse and d: HBM->reg->lds
-            float lse_reg, d_reg;
-            lse_reg = threadIdx.x < kM0 ? lse_raw[lse_d_hbm_offset] : 0;
-            lse_raw += kM0;
-            d_reg = threadIdx.x < kM0 ? d_raw[lse_d_hbm_offset] : 0;
-            d_raw += kM0;
-            char* lse_smem = smem_ptr;
-            char* d_smem = lse_smem + kM0 * sizeof(LSEDataType);
-            if (threadIdx.x < kM0)
-            {
-                *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
-                *reinterpret_cast<float*>(d_smem + lse_d_lds_write_offset) = d_reg;
-            }
-
-            // q and do: HBM->reg->lds
             if(i_total_loops < (num_total_loop - 1))
             {
 #if 1
+                // q and do: HBM->reg->lds
 #pragma unroll
                 for(int i = 0; i < q_do_global_num; i++)
                 {
@@ -1010,6 +1003,11 @@ struct FmhaBwdDQDKDVKernel
                     do_reg_tmp[i] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
                     do_ptr += q_do_load_reg_offset;
                 }
+                // lse and d: HBM->reg->lds
+                lse_reg_tmp = threadIdx.x < kM0 ? lse_raw[lse_d_hbm_offset] : 0;
+                lse_raw += kM0;
+                d_reg_tmp = threadIdx.x < kM0 ? d_raw[lse_d_hbm_offset] : 0;
+                d_raw += kM0;
 #else
                 q_reg_tmp[0] = k_reg[0];
                 q_ptr += q_do_load_reg_offset + q_do_load_offset;
@@ -1022,6 +1020,8 @@ struct FmhaBwdDQDKDVKernel
 #endif
             }
            
+            char* lse_smem = smem_ptr;
+            char* d_smem = lse_smem + kM0 * sizeof(LSEDataType);
             char* q_smem = d_smem + kM0 * sizeof(DDataType);
             char* do_smem = q_smem + (kM0 * sizeof(KDataType) + q_do_padding) * kQKHeaddim;
             char* ds_smem = do_smem;
@@ -1033,6 +1033,12 @@ struct FmhaBwdDQDKDVKernel
                 *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset + kv_smem_reg_offset * i) = do_reg[i];
             }
 #endif
+            if (threadIdx.x < kM0)
+            {
+                *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
+                *reinterpret_cast<float*>(d_smem + lse_d_lds_write_offset) = d_reg;
+            }
+
             __syncthreads();
 
             // gemm 0
@@ -1429,6 +1435,15 @@ struct FmhaBwdDQDKDVKernel
                 do_reg_tmp[i_qdo_reg] = do_reg[i_qdo_reg];
                 do_reg[i_qdo_reg] = q_do_swap_tmp;
             }
+
+            float lse_d_swap_tmp;
+            lse_d_swap_tmp = lse_reg_tmp;
+            lse_reg_tmp = lse_reg;
+            lse_reg = lse_d_swap_tmp;
+            lse_d_swap_tmp = d_reg_tmp;
+            d_reg_tmp = d_reg;
+            d_reg = lse_d_swap_tmp;
+
 
             i_total_loops += 1;
             // seqlen_q_step += kM0;
