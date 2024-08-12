@@ -21,9 +21,54 @@
 // dK[seqlen_k, hdim_q] = dS'^T[seqlen_k, seqlen_q] @ Q^T[hdim_q, seqlen_q] * Scale[1]
 // dQ[seqlen_q, hdim_q] = dS'[seqlen_q, seqlen_k] @ K^T[hdim_q, seqlen_k] * Scale[1]
 
+#define DS_LDS_WRITE 1
+
 namespace ck_tile {
 
-#define GCN_MFMA_INSTR __builtin_amdgcn_mfma_f32_32x32x8bf16_1k
+#define GCN_MFMA_INSTR_32 __builtin_amdgcn_mfma_f32_32x32x8bf16_1k
+#define GCN_MFMA_INSTR_16 __builtin_amdgcn_mfma_f32_16x16x16bf16_1k
+
+template <ck_tile::index_t InstM,
+          ck_tile::index_t InstN,
+          ck_tile::index_t InstK>
+struct GcnMfmaInstr;
+
+template <>
+struct GcnMfmaInstr<32, 32, 8>
+{
+    using CVecType = float __attribute__((ext_vector_type(16)));// __attribute__((vector_size(16 * sizeof(float)))) float;
+    using ABVecType = __attribute__((vector_size(4 * sizeof(bf16_t)))) bf16_t;
+    __device__ static void mfma_run(const ABVecType& a, const ABVecType& b, CVecType& c)
+    {
+        c = GCN_MFMA_INSTR_32(a, b, c, 0, 0, 0);
+    }
+};
+
+template <>
+struct GcnMfmaInstr<16, 16, 16>
+{
+    using CVecType = float __attribute__((ext_vector_type(4)));// __attribute__((vector_size(16 * sizeof(float)))) float;
+    using ABVecType = __attribute__((vector_size(4 * sizeof(bf16_t)))) bf16_t;
+    __device__ static void mfma_run(const ABVecType& a, const ABVecType& b, CVecType& c)
+    {
+        c = GCN_MFMA_INSTR_16(a, b, c, 0, 0, 0);
+    }
+};
+
+template <typename T, ck_tile::index_t N>
+struct QGemm3DOGemm1LdsLoadVecType;
+
+template <>
+struct QGemm3DOGemm1LdsLoadVecType<bf16_t, 2>
+{
+    using Type = float;
+};
+
+template <>
+struct QGemm3DOGemm1LdsLoadVecType<bf16_t, 4>
+{
+    using Type = float2;
+};
 
 template <typename TilePartitioner_,
           typename FmhaPipeline_,
@@ -67,6 +112,52 @@ struct FmhaBwdDQDKDVKernel
     static constexpr bool kHasDropout = FmhaDropout::IsDropout;
     static constexpr bool kIsStoreRandval  = FmhaDropout::IsStoreRandval;
     static constexpr bool kIsDeterministic = FmhaPipeline::kIsDeterministic;
+
+    // tile/warp
+    static constexpr ck_tile::index_t kM0        = FmhaPipeline::kM0;
+    static constexpr ck_tile::index_t kN0        = FmhaPipeline::kN0;
+    static constexpr ck_tile::index_t kK0        = FmhaPipeline::kK0;
+    static constexpr ck_tile::index_t kK1        = FmhaPipeline::kK1;
+    static constexpr ck_tile::index_t kK2        = FmhaPipeline::kK2;
+    static constexpr ck_tile::index_t kK3        = FmhaPipeline::kK3;
+    static constexpr ck_tile::index_t kK4        = FmhaPipeline::kK4;
+    static constexpr ck_tile::index_t kQKHeaddim = FmhaPipeline::kQKHeaddim;
+    static constexpr ck_tile::index_t kVHeaddim  = FmhaPipeline::kVHeaddim;
+
+    using BlockShape = typename FmhaPipeline::BlockFmhaShape;
+    using Gemm0Gemm2BlockWarps = typename BlockShape::Gemm0BlockWarps;
+    using Gemm1Gemm3BlockWarps = typename BlockShape::Gemm1BlockWarps;
+    using Gemm4BlockWarps = typename BlockShape::Gemm4BlockWarps;
+    using Gemm0Gemm2Gemm4WarpTile = typename BlockShape::Gemm0WarpTile;
+    using Gemm1Gemm3WarpTile = typename BlockShape::Gemm1WarpTile;
+
+    static constexpr ck_tile::index_t kGemm0Gemm2rm = Gemm0Gemm2BlockWarps::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm0Gemm2rn = Gemm0Gemm2BlockWarps::at(ck_tile::number<1>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3rm = Gemm1Gemm3BlockWarps::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3rn = Gemm1Gemm3BlockWarps::at(ck_tile::number<1>{});
+    static constexpr ck_tile::index_t kGemm4rm = Gemm4BlockWarps::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm4rn = Gemm4BlockWarps::at(ck_tile::number<1>{});
+
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpM = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpN = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<1>{});
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpK = Gemm0Gemm2Gemm4WarpTile::at(ck_tile::number<2>{});
+    static constexpr ck_tile::index_t kGemm4WarpK = kGemm0Gemm2Gemm4WarpK / 2;
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4WarpKInst = kGemm0Gemm2Gemm4WarpK / 2;
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpM = Gemm1Gemm3WarpTile::at(ck_tile::number<0>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpN = Gemm1Gemm3WarpTile::at(ck_tile::number<1>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpK = Gemm1Gemm3WarpTile::at(ck_tile::number<2>{});
+    static constexpr ck_tile::index_t kGemm1Gemm3WarpKInst = kGemm1Gemm3WarpK / 2;
+    
+    using Gemm0Gemm2Gemm4MfmaInstr = GcnMfmaInstr<kGemm0Gemm2Gemm4WarpM, kGemm0Gemm2Gemm4WarpN, kGemm0Gemm2Gemm4WarpKInst>;
+    using Gemm1Gemm3MfmaInstr = GcnMfmaInstr<kGemm1Gemm3WarpM, kGemm1Gemm3WarpN, kGemm1Gemm3WarpKInst>;
+
+    static constexpr ck_tile::index_t kGemm0Gemm2Gemm4AccNum = kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2Gemm4WarpN / 64;
+    static constexpr ck_tile::index_t kGemm1Gemm3AccNum = kGemm1Gemm3WarpM * kGemm1Gemm3WarpN / 64;
+    static constexpr ck_tile::index_t kGemm4GroupM = kGemm0Gemm2Gemm4WarpM / kGemm0Gemm2Gemm4AccNum * 4;
+
+    static constexpr ck_tile::index_t kGemm0Gemm2KLoops = kQKHeaddim / kGemm0Gemm2Gemm4WarpK;
+    static constexpr ck_tile::index_t kGemm1Gemm3KLoops = kN0 / kGemm1Gemm3WarpKInst;
+    static constexpr ck_tile::index_t kGemm4KLoops = kN0 / kGemm4WarpK;
 
     // clang-format off
     template <typename T> struct t2s;
@@ -684,104 +775,118 @@ struct FmhaBwdDQDKDVKernel
         {
             bfloat16x4 xy[2];
         } _BF16x8_t;
-        using CVecType = ext_vector_t<float, 16>;
+        using CVecType = ext_vector_t<float, kGemm0Gemm2Gemm4AccNum>;
 
         // imm number
         constexpr int32_t m0 = 0x05040100;
         constexpr int32_t m1 = 0x07060302;
 
+        constexpr int32_t kQKHeaddimBytes = kQKHeaddim * sizeof(KDataType);
+
         // prepare k and v_t in smem
-        float4 k_reg[4];
-        int kv_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_k;
-        int kv_reg_offset = kargs.stride_k * 32;
-
-        k_reg[0] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        k_ptr += kv_reg_offset;
-        k_reg[1] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        k_ptr += kv_reg_offset;
-        k_reg[2] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        k_ptr += kv_reg_offset;
-        k_reg[3] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-
-        float4 v_reg[4];
-        
-        v_reg[0] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        v_ptr += kv_reg_offset;
-        v_reg[1] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        v_ptr += kv_reg_offset;
-        v_reg[2] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-        v_ptr += kv_reg_offset;
-        v_reg[3] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-
-        char* k_smem = smem_ptr;
-        int kvqdo_smem_offset = threadIdx.x * 16;
-        constexpr int q_do_padding = 16;
-        int kvqdo_smem_offset_padding = kvqdo_smem_offset / 128 * q_do_padding;
-        kvqdo_smem_offset += kvqdo_smem_offset_padding;
-        constexpr int kv_smem_reg_offset = 32 * (64 * 2 + q_do_padding);
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset) = k_reg[0];
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset) = k_reg[1];
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * 2) = k_reg[2];
-        *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * 3) = k_reg[3];
-       
-        __syncthreads();
- 
-        _BF16x8_t kt_reg_to_gemm0[4];
-        int wave_id = threadIdx.x / 64;
-        int wave_lane_id = threadIdx.x % 64;
-        int k0_id = wave_lane_id / 32;
-        int n_id = wave_lane_id % 32;
-        int n_wave_repeat_id = wave_id % 4;
-        int k_smem_gemm0_offset = n_wave_repeat_id * 32 * (64 * 2 + q_do_padding) + n_id * (64 * 2 + q_do_padding) + k0_id * 16;
-        constexpr int k_smem_read_reg_offset = 32;
-        kt_reg_to_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset);
-        kt_reg_to_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
-        kt_reg_to_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
-        kt_reg_to_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
-
-        float2 k_reg_to_gemm4[16];
-        unsigned short k_gemm4[4];
-        int gemm4_n_wave_id = wave_id / 2;
-        int k_smem_gemm4_offset = n_id * 2 + k0_id * (64 * 2 + q_do_padding) * 4 + gemm4_n_wave_id * 32 * 2;
-        constexpr int k_smem_gemm4_offset_k1 = 64 * 2 + q_do_padding;
-        constexpr int k_smem_gemm4_offset_reg = (64 * 2 + q_do_padding) * 8;
+        constexpr int k_reg_num = kN0 * kQKHeaddimBytes / (kBlockSize * sizeof(float4));
+        constexpr int kv_vec_global = sizeof(float4) / sizeof(KDataType);
+        constexpr int k_reg_row = kBlockSize * sizeof(float4) / kQKHeaddimBytes;
+        constexpr int num_threads_per_hd_global_load = kQKHeaddimBytes / sizeof(float4);
+        constexpr int num_threads_per_hd_global_load_minus_1 = num_threads_per_hd_global_load - 1;
+        float4 k_reg[k_reg_num];
+        int kv_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * kv_vec_global + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_k;
+        int kv_reg_offset = kargs.stride_k * k_reg_row;
 
 #pragma unroll
-        for (int i = 0; i < 16; i++)
+        for(int i_k_reg = 0; i_k_reg < k_reg_num; i_k_reg++)
         {
-            k_gemm4[0] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset);
-            k_gemm4[1] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1);
-            k_gemm4[2] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 2);
-            k_gemm4[3] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 3);
-            k_smem_gemm4_offset += k_smem_gemm4_offset_reg;
-            asm volatile("v_pack_b32_f16 %0, %1, %2"
-                         : "=v"(k_reg_to_gemm4[i].x)
-                         : "v"(k_gemm4[0]), "v"(k_gemm4[1]));
-            asm volatile("v_pack_b32_f16 %0, %1, %2"
-                         : "=v"(k_reg_to_gemm4[i].y)
-                         : "v"(k_gemm4[2]), "v"(k_gemm4[3]));
+            k_reg[i_k_reg] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
+            k_ptr += kv_reg_offset;
         }
+
+        constexpr int v_reg_num = kN0 * kVHeaddim * sizeof(VDataType) / (kBlockSize * sizeof(float4));
+        float4 v_reg[v_reg_num];
+
+#pragma unroll
+        for(int i_v_reg = 0; i_v_reg < v_reg_num; i_v_reg++)
+        {
+            v_reg[i_v_reg] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
+            v_ptr += kv_reg_offset;
+        }
+
+        char* k_smem = smem_ptr;
+        int kvqdo_smem_offset = threadIdx.x * sizeof(float4);
+        constexpr int q_do_padding = sizeof(float4);
+        int kvqdo_smem_offset_padding = kvqdo_smem_offset / kN0 * q_do_padding;
+        kvqdo_smem_offset += kvqdo_smem_offset_padding;
+        constexpr int kv_smem_reg_offset = k_reg_row * (kQKHeaddim * sizeof(KDataType) + q_do_padding);
+
+#pragma unroll
+        for(int i_k_reg = 0; i_k_reg < k_reg_num; i_k_reg++)
+        {
+            *reinterpret_cast<float4*>(k_smem + kvqdo_smem_offset + kv_smem_reg_offset * i_k_reg) = k_reg[i_k_reg];
+        }
+       
+        __syncthreads();
+
+        constexpr int kt_reg_gemm0_vt_reg_gemm2_num = kGemm0Gemm2rm * kQKHeaddim * kN0 * sizeof(KDataType) / (kBlockSize * sizeof(_BF16x8_t));
+        _BF16x8_t kt_reg_to_gemm0[kt_reg_gemm0_vt_reg_gemm2_num];
+        int wave_id = threadIdx.x / 64;
+        int wave_lane_id = threadIdx.x % 64;
+        int k0_id = wave_lane_id / kGemm0Gemm2Gemm4WarpM;
+        int n_id = wave_lane_id % kGemm0Gemm2Gemm4WarpM;
+        int n_wave_repeat_id = wave_id % kGemm0Gemm2rn;
+        int k_smem_gemm0_offset = n_wave_repeat_id * kGemm0Gemm2Gemm4WarpN * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + n_id * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + k0_id * 16;
+        constexpr int k_smem_read_reg_offset = kGemm0Gemm2Gemm4WarpK * sizeof(KDataType);
+
+#pragma unroll
+        for(int i_kt_reg_gemm0 = 0; i_kt_reg_gemm0 < kt_reg_gemm0_vt_reg_gemm2_num; i_kt_reg_gemm0++)
+        {
+            kt_reg_to_gemm0[i_kt_reg_gemm0] = *reinterpret_cast<_BF16x8_t*>(k_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * i_kt_reg_gemm0);
+        }
+
+        constexpr int k_reg_gemm4_num = kGemm4rm * kN0 * kQKHeaddim * sizeof(KDataType) / (kBlockSize * sizeof(bfloat16x4));
+        bfloat16x4 k_reg_to_gemm4[k_reg_gemm4_num];
+        int gemm4_n_wave_id = wave_id / kGemm4rm;
+        int k_smem_gemm4_offset = n_id * sizeof(KDataType) + k0_id * (kQKHeaddim * sizeof(KDataType) + q_do_padding) * 4 + gemm4_n_wave_id * kGemm0Gemm2Gemm4WarpN * sizeof(KDataType);
+        constexpr int k_smem_gemm4_offset_k1 = kQKHeaddim * sizeof(KDataType)  + q_do_padding;
+        constexpr int k_smem_gemm4_offset_reg = (kQKHeaddim * sizeof(KDataType) + q_do_padding) * kGemm4WarpK;
+
+#pragma unroll
+        for (int i = 0; i < k_reg_gemm4_num; i++)
+        {
+            k_reg_to_gemm4[i][0] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset);
+            k_reg_to_gemm4[i][1] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1);
+            k_reg_to_gemm4[i][2] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 2);
+            k_reg_to_gemm4[i][3] = *reinterpret_cast<unsigned short*>(k_smem + k_smem_gemm4_offset + k_smem_gemm4_offset_k1 * 3);
+            k_smem_gemm4_offset += k_smem_gemm4_offset_reg;
+        }
+
+#if 0
+        printf("thread=%d, k_smem_gemm4_offset=%d, k_smem_gemm4_offset_k1=%d, k_smem_gemm4_offset_reg=%d\n",
+            type_convert<int>(threadIdx.x),
+            k_smem_gemm4_offset - k_smem_gemm4_offset_reg * k_reg_gemm4_num,
+            k_smem_gemm4_offset_k1,
+            k_smem_gemm4_offset_reg);
+#endif
 
         __syncthreads();
 
         char* v_smem = smem_ptr;
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset) = v_reg[0];
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset) = v_reg[1];
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * 2) = v_reg[2];
-        *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * 3) = v_reg[3];
+#pragma unroll
+        for(int i = 0; i < v_reg_num; i++)
+        {
+            *reinterpret_cast<float4*>(v_smem + kvqdo_smem_offset + kv_smem_reg_offset * i) = v_reg[i];
+        }
 
         __syncthreads();
 
-        _BF16x8_t vt_reg_gemm2[4];
-        vt_reg_gemm2[0] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset);
-        vt_reg_gemm2[1] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset);
-        vt_reg_gemm2[2] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 2);
-        vt_reg_gemm2[3] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * 3);
+        _BF16x8_t vt_reg_gemm2[kt_reg_gemm0_vt_reg_gemm2_num];
+#pragma unroll
+        for(int i = 0; i < kt_reg_gemm0_vt_reg_gemm2_num; i++)
+        {
+            vt_reg_gemm2[i] = *reinterpret_cast<_BF16x8_t*>(v_smem + k_smem_gemm0_offset + k_smem_read_reg_offset * i);
+        }
         
         __syncthreads();
 
         // prepare core loop
-        constexpr int kM0 = 64;
         auto seqlen_q_start = 0;
         auto seqlen_q_end = kargs.seqlen_q;
         index_t i_total_loops = 0;
@@ -789,43 +894,52 @@ struct FmhaBwdDQDKDVKernel
         const auto num_total_loop = integer_divide_ceil(seqlen_q_end - seqlen_q_start, kM0);
 
         // loading offset
-        int q_do_load_offset = (threadIdx.x & 7) * 8 + (threadIdx.x >> 3) * kargs.stride_q;
-        int q_do_load_reg_offset = kargs.stride_q * 32;
+        constexpr int q_do_reg_rows = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
+        int q_do_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * num_threads_per_hd_global_load + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_q;
+        int q_do_load_reg_offset = kargs.stride_q * q_do_reg_rows;
 
         constexpr int st_acc_gemmk_offset = 4;
         
         // hbm store offset
+#if 1 //DQ_ATOMICADD
         int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
-        const int dq_acc_wave_offset = (wave_id / 2) * 32 + (wave_id % 2) * 32 * kargs.stride_q;
+        const int dq_acc_wave_offset = (wave_id / kGemm4rm) * kGemm0Gemm2Gemm4WarpN + (wave_id % kGemm4rm) * kGemm0Gemm2Gemm4WarpM * kargs.stride_q;
         dq_acc_offset += dq_acc_wave_offset;
+#endif
 
         // lds write offset
         // gemm4 ds offset
         constexpr int ds_padding_bytes = 8;
-#if 1
-        const int ds_lds_write_offset = n_id * 2 + k0_id * (128 * 2 + ds_padding_bytes) * 4 + n_wave_repeat_id * 32 * 2;
-        constexpr int ds_lds_write_reg_offset = 128 * 2 + ds_padding_bytes;
-        constexpr int ds_lds_gemm_m_group_offset = (128 * 2 + ds_padding_bytes) * 8;
-        constexpr int ds_lds_gemm_m_acc_reg_offset = (128 * 2 + ds_padding_bytes) * 32;
+#if DS_LDS_WRITE
+        const int ds_lds_write_offset = n_id * sizeof(KDataType) + k0_id * (kN0 * sizeof(KDataType) + ds_padding_bytes) * 4 + n_wave_repeat_id * kGemm0Gemm2Gemm4WarpM * sizeof(KDataType);
+        constexpr int ds_lds_write_reg_offset = kN0 * sizeof(KDataType) + ds_padding_bytes;
+        constexpr int ds_lds_gemm_m_group_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm4WarpK;
+        constexpr int ds_lds_gemm_m_acc_reg_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm0Gemm2Gemm4WarpM;
 #endif
 
         // lds read offset
-        int q_gemm0_do_gemm2_offset = n_id * (64 * 2 + q_do_padding) + k0_id * 16;
-        constexpr int q_gemm0_do_gemm2_reg_offset = 32 * (64 * 2 + q_do_padding);
-        constexpr int q_gemm0_do_gemm2_gemmk_offset = 16 * 2;
-        int q_gemm3_do_gemm1_offset = n_id * 4 + k0_id * (64 * 2 + q_do_padding) * 4;
-        constexpr int q_gemm3_do_gemm1_reg_offset = 64 * 2 + q_do_padding;
-        constexpr int q_gemm3_do_gemm1_gemmk_offset = (64 * 2 + q_do_padding) * 8;
+        int q_gemm0_do_gemm2_offset = n_id * (kQKHeaddimBytes + q_do_padding) + k0_id * 4 * 2 * sizeof(KDataType);
+        constexpr int q_gemm0_do_gemm2_reg_rows = kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2rm;
+        constexpr int q_gemm0_do_gemm2_reg_offset = q_gemm0_do_gemm2_reg_rows * (kQKHeaddimBytes + q_do_padding);
+        constexpr int q_gemm0_do_gemm2_gemmk_offset = kGemm0Gemm2Gemm4WarpK * sizeof(KDataType);
+        constexpr int q_gemm3_do_gemm1_elements = kQKHeaddim / (kGemm1Gemm3WarpN * kGemm1Gemm3rn);
+        using q_gemm3_do_gemm1_vec_type = typename QGemm3DOGemm1LdsLoadVecType<QDataType, q_gemm3_do_gemm1_elements>::Type;
+        constexpr int q_gemm3_do_gemm1_elements_in_byte = q_gemm3_do_gemm1_elements * sizeof(KDataType);
+        int q_gemm3_do_gemm1_offset = n_id * q_gemm3_do_gemm1_elements_in_byte  + k0_id * (kQKHeaddimBytes + q_do_padding) * q_gemm3_do_gemm1_elements;
+        constexpr int q_gemm3_do_gemm1_reg_offset = kQKHeaddimBytes + q_do_padding;
+        constexpr int q_gemm3_do_gemm1_gemmk_offset = (kQKHeaddimBytes + q_do_padding) * kGemm1Gemm3WarpKInst;
 
         // gemm4 ds offset
-        int ds_gemm4_offset = n_id * (128 * 2 + ds_padding_bytes) + k0_id * 4 * 2;
-        const int ds_gemm4_m_wave_offset = (wave_id % 2) * (128 * 2 + ds_padding_bytes) * 32;
+        int ds_gemm4_offset = n_id * (kN0 * sizeof(KDataType) + ds_padding_bytes) + k0_id * 4 * sizeof(KDataType);
+        const int ds_gemm4_m_wave_offset = (wave_id % kGemm4rm) * (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm0Gemm2Gemm4WarpM;
         ds_gemm4_offset += ds_gemm4_m_wave_offset;
-        constexpr int ds_gemm4_kiter_offset = 8 * 2;
+        constexpr int ds_gemm4_kiter_offset = kGemm4WarpK * sizeof(KDataType);
+        constexpr int dq_acc_reg_offset = (kN0 * sizeof(KDataType) + ds_padding_bytes) * kGemm0Gemm2Gemm4WarpM * kGemm4rm;
 
         // lse and d hbm offset and lds write read offset
         // constexpr int lse_d_step_offset = 64 * sizeof(float);
-        constexpr int lse_d_reg_offset = 8 * sizeof(float);
+        constexpr int gemm4_groups = 64 / kGemm0Gemm2Gemm4WarpM;
+        constexpr int lse_d_reg_offset = 4 * gemm4_groups * sizeof(float);
         int lse_d_hbm_offset = threadIdx.x;
         int lse_d_lds_write_offset = threadIdx.x * sizeof(float);
         int lse_d_lds_read_offset = k0_id * 4 * sizeof(float);
@@ -835,201 +949,204 @@ struct FmhaBwdDQDKDVKernel
         auto scale = kargs.scale;
 
         // acc clear
-        CVecType dv_acc[2];
-        dv_acc[0] = {0};
-        dv_acc[1] = {0};
+        constexpr int dv_acc_num = kVHeaddim * kN0 / (kGemm1Gemm3rm * kGemm1Gemm3rn * kGemm1Gemm3WarpM * kGemm1Gemm3WarpN);
+        CVecType dv_acc[dv_acc_num];
+#pragma unroll
+        for(int i = 0; i < dv_acc_num; i++)
+        {
+            dv_acc[i] = {0};
+        }
         
-        CVecType dk_acc[2];
-        dk_acc[0] = {0};
-        dk_acc[1] = {0};
-       
-        float4 q_reg[2];
-        float4 do_reg[2];
-        float4 q_reg_tmp[2];
-        float4 do_reg_tmp[2];
+        constexpr int dk_acc_num = kQKHeaddim * kN0 / (kGemm1Gemm3rm * kGemm1Gemm3rn * kGemm1Gemm3WarpM * kGemm1Gemm3WarpN);
+        CVecType dk_acc[dk_acc_num];
+#pragma unroll
+        for(int i = 0; i < dk_acc_num; i++)
+        {
+            dk_acc[i] = {0};
+        }
 
-        q_reg[0] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
-        q_ptr += q_do_load_reg_offset;
-        q_reg[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
-        q_ptr += q_do_load_reg_offset;
+        constexpr int q_do_global_num = kQKHeaddim * kM0 * sizeof(KDataType) / (kBlockSize * sizeof(float4));
+        float4 q_reg[q_do_global_num];
+        float4 do_reg[q_do_global_num];
+        float4 q_reg_tmp[q_do_global_num];
+        float4 do_reg_tmp[q_do_global_num];
+
+        // prefetch
+#pragma unroll
+        for(int i = 0; i < q_do_global_num; i++)
+        {
+            q_reg[i] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+            q_ptr += q_do_load_reg_offset;
+            do_reg[i] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
+            do_ptr += q_do_load_reg_offset;
+        }
+
+        float lse_reg = 0, d_reg = 0, lse_reg_tmp = 0, d_reg_tmp = 0;
+        lse_reg = threadIdx.x < kM0 ? lse_raw[lse_d_hbm_offset] : 0;
+        lse_raw += kM0;
+        d_reg = threadIdx.x < kM0 ? d_raw[lse_d_hbm_offset] : 0;
+        d_raw += kM0;
+
         
-        do_reg[0] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
-        do_ptr += q_do_load_reg_offset;
-        do_reg[1] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
-        do_ptr += q_do_load_reg_offset;
- 
         // core loop
         do
         {
-            // lse and d: HBM->reg->lds
-            float lse_reg, d_reg;
-            lse_reg = threadIdx.x < 64 ? lse_raw[lse_d_hbm_offset] : 0;
-            lse_raw += 64;
-            d_reg = threadIdx.x < 64 ? d_raw[lse_d_hbm_offset] : 0;
-            d_raw += 64;
+            if(i_total_loops < (num_total_loop - 1))
+            {
+#if 1
+                // q and do: HBM->reg->lds
+#pragma unroll
+                for(int i = 0; i < q_do_global_num; i++)
+                {
+                    q_reg_tmp[i] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
+                    q_ptr += q_do_load_reg_offset;
+                    do_reg_tmp[i] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
+                    do_ptr += q_do_load_reg_offset;
+                }
+                // lse and d: HBM->reg->lds
+                lse_reg_tmp = threadIdx.x < kM0 ? lse_raw[lse_d_hbm_offset] : 0;
+                lse_raw += kM0;
+                d_reg_tmp = threadIdx.x < kM0 ? d_raw[lse_d_hbm_offset] : 0;
+                d_raw += kM0;
+#else
+                q_reg_tmp[0] = k_reg[0];
+                q_ptr += q_do_load_reg_offset + q_do_load_offset;
+                q_reg_tmp[1] = k_reg[1];
+                q_ptr += q_do_load_reg_offset;
+                do_reg_tmp[0] = v_reg[0];
+                do_ptr += q_do_load_reg_offset;
+                do_reg_tmp[1] = v_reg[1];
+                do_ptr += q_do_load_reg_offset;
+#endif
+            }
+           
             char* lse_smem = smem_ptr;
-            char* d_smem = lse_smem + 256;
-            if (threadIdx.x < 64)
+            char* d_smem = lse_smem + kM0 * sizeof(LSEDataType);
+            char* q_smem = d_smem + kM0 * sizeof(DDataType);
+            char* do_smem = q_smem + (kM0 * sizeof(KDataType) + q_do_padding) * kQKHeaddim;
+            char* ds_smem = do_smem;
+#if 1
+#pragma unroll
+            for(int i = 0; i < q_do_global_num; i++)
+            {
+                *reinterpret_cast<float4*>(q_smem + kvqdo_smem_offset + kv_smem_reg_offset * i) = q_reg[i];
+                *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset + kv_smem_reg_offset * i) = do_reg[i];
+            }
+#endif
+            if (threadIdx.x < kM0)
             {
                 *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
                 *reinterpret_cast<float*>(d_smem + lse_d_lds_write_offset) = d_reg;
             }
 
-            //printf("thread:[%d], lse_d_hbm_offset=%d\n", type_convert<int>(threadIdx.x), lse_d_hbm_offset);
-            //printf("thread:[%d], lse_d_lds_write_offset=%d\n", type_convert<int>(threadIdx.x), lse_d_lds_write_offset);
-            //printf("thread:[%d], lse_reg=%f\n", type_convert<int>(threadIdx.x), lse_reg);
-
-            // q and do: HBM->reg->lds
-            // float4 q_reg[2];
-            if(i_total_loops < (num_total_loop - 1))
-            {
-#if 1
-            q_reg_tmp[0] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
-            q_ptr += q_do_load_reg_offset;
-            q_reg_tmp[1] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
-            q_ptr += q_do_load_reg_offset;
-#else
-            q_reg_tmp[0] = k_reg[0];
-            q_ptr += q_do_load_reg_offset + q_do_load_offset;
-            q_reg_tmp[1] = k_reg[1];
-            q_ptr += q_do_load_reg_offset;
-#endif
-            // float4 do_reg[2];
-#if 1
-            do_reg_tmp[0] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
-            do_ptr += q_do_load_reg_offset;
-            do_reg_tmp[1] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
-            do_ptr += q_do_load_reg_offset;
-#else
-            do_reg_tmp[0] = v_reg[0];
-            do_ptr += q_do_load_reg_offset;
-            do_reg_tmp[1] = v_reg[1];
-            do_ptr += q_do_load_reg_offset;
-#endif
-            }
-           
-            char* q_smem = d_smem + 64 * 4;
-            char* do_smem = q_smem + (128 + q_do_padding) * 64;
-            char* ds_smem = do_smem;
-#if 1
-            *reinterpret_cast<float4*>(q_smem + kvqdo_smem_offset) = q_reg[0];
-            *reinterpret_cast<float4*>(q_smem + kvqdo_smem_offset + kv_smem_reg_offset) = q_reg[1];
-            *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset) = do_reg[0];
-            *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset + kv_smem_reg_offset) = do_reg[1];
-#endif
             __syncthreads();
 
             // gemm 0
-            _BF16x8_t q_reg_gemm0[4];
-            CVecType st_acc[2];
-            st_acc[0] = {0};
-            st_acc[1] = {0};
+            constexpr int st_acc_num = kM0 * kN0 * sizeof(AccDataType) / (kBlockSize * sizeof(CVecType));
+            constexpr int q_gemm0_reg_num = kM0 * kQKHeaddim * sizeof(KDataType) * kGemm0Gemm2rn / (st_acc_num * kBlockSize * sizeof(_BF16x8_t));
+            _BF16x8_t q_reg_gemm0[q_gemm0_reg_num];
+            CVecType st_acc[st_acc_num];
+#pragma unroll
+            for(int i = 0; i < st_acc_num; i++)
+            {
+                st_acc[i] = {0};
+            }
 
+#pragma unroll
+            for(int i_st_acc = 0; i_st_acc < st_acc_num; i_st_acc++)
+            {
 #if 1
-            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset);
-            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
-            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
-            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
+#pragma unroll
+                for(int i = 0; i < q_gemm0_reg_num; i++)
+                {
+                    q_reg_gemm0[i] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * i + q_gemm0_do_gemm2_reg_offset * i_st_acc);
+                }
 #endif
 
 #if 1
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[0].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[0].xy[1], st_acc[1], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[1].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[1].xy[1], st_acc[1], 0, 0, 0);
+#pragma unroll
+                for(int i = 0; i < kGemm0Gemm2KLoops; i++)
+                {
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[0], kt_reg_to_gemm0[i].xy[0], st_acc[i_st_acc]);
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[1], kt_reg_to_gemm0[i].xy[1], st_acc[i_st_acc]);
+                }
 #endif
+            }
 
-#if 1
-            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
-            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
-            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
-            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(q_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
+#if 0
+            printf("thread=%d, q_gemm0_do_gemm2_offset=%d, q_gemm0_do_gemm2_gemmk_offset=%d, q_reg_gemm0[1].xy[1]=[%f,%f,%f,%f], kt_reg_to_gemm0[1].xy[1]=[%f, %f, %f, %f]\n",
+                type_convert<int>(threadIdx.x),
+                q_gemm0_do_gemm2_offset,
+                q_gemm0_do_gemm2_gemmk_offset,
+                type_convert<float>(q_reg_gemm0[1].xy[1][0]),
+                type_convert<float>(q_reg_gemm0[1].xy[1][1]),
+                type_convert<float>(q_reg_gemm0[1].xy[1][2]),
+                type_convert<float>(q_reg_gemm0[1].xy[1][3]),
+                type_convert<float>(kt_reg_to_gemm0[1].xy[1][0]),
+                type_convert<float>(kt_reg_to_gemm0[1].xy[1][1]),
+                type_convert<float>(kt_reg_to_gemm0[1].xy[1][2]),
+                type_convert<float>(kt_reg_to_gemm0[1].xy[1][3]));
 #endif
-
-#if 1
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], kt_reg_to_gemm0[2].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], kt_reg_to_gemm0[2].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], kt_reg_to_gemm0[2].xy[1], st_acc[1], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[0], 0, 0, 0);
-            st_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[0], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], kt_reg_to_gemm0[3].xy[0], st_acc[1], 0, 0, 0);
-            st_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], kt_reg_to_gemm0[3].xy[1], st_acc[1], 0, 0, 0);
+#if 0
+            printf("thread=%d, st_acc[3]=[%f,%f,%f,%f]\n",
+                type_convert<int>(threadIdx.x),
+                st_acc[3][0],
+                st_acc[3][1],
+                st_acc[3][2],
+                st_acc[3][3]);
 #endif
 
             // softmax
-            floatx4 lse_d[2];
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset);
-
-            st_acc[0][0] = exp2(scale * st_acc[0][0] - lse_d[0][0]);
-#if 1
-            st_acc[0][1] = exp2(scale * st_acc[0][1] - lse_d[0][1]);
-            st_acc[0][2] = exp2(scale * st_acc[0][2] - lse_d[0][2]);
-            st_acc[0][3] = exp2(scale * st_acc[0][3] - lse_d[0][3]);
-            st_acc[0][4] = exp2(scale * st_acc[0][4] - lse_d[1][0]);
-            st_acc[0][5] = exp2(scale * st_acc[0][5] - lse_d[1][1]);
-            st_acc[0][6] = exp2(scale * st_acc[0][6] - lse_d[1][2]);
-            st_acc[0][7] = exp2(scale * st_acc[0][7] - lse_d[1][3]);
-
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 2);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 3);
-
-            st_acc[0][8]  = exp2(scale * st_acc[0][8]  - lse_d[0][0]);
-            st_acc[0][9]  = exp2(scale * st_acc[0][9]  - lse_d[0][1]);
-            st_acc[0][10] = exp2(scale * st_acc[0][10] - lse_d[0][2]);
-            st_acc[0][11] = exp2(scale * st_acc[0][11] - lse_d[0][3]);
-            st_acc[0][12] = exp2(scale * st_acc[0][12] - lse_d[1][0]);
-            st_acc[0][13] = exp2(scale * st_acc[0][13] - lse_d[1][1]);
-            st_acc[0][14] = exp2(scale * st_acc[0][14] - lse_d[1][2]);
-            st_acc[0][15] = exp2(scale * st_acc[0][15] - lse_d[1][3]);
-
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 4);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 5);
-
-            st_acc[1][0] = exp2(scale * st_acc[1][0] - lse_d[0][0]);
-            st_acc[1][1] = exp2(scale * st_acc[1][1] - lse_d[0][1]);
-            st_acc[1][2] = exp2(scale * st_acc[1][2] - lse_d[0][2]);
-            st_acc[1][3] = exp2(scale * st_acc[1][3] - lse_d[0][3]);
-            st_acc[1][4] = exp2(scale * st_acc[1][4] - lse_d[1][0]);
-            st_acc[1][5] = exp2(scale * st_acc[1][5] - lse_d[1][1]);
-            st_acc[1][6] = exp2(scale * st_acc[1][6] - lse_d[1][2]);
-            st_acc[1][7] = exp2(scale * st_acc[1][7] - lse_d[1][3]);
-
-            lse_d[0] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 6);
-            lse_d[1] = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset + lse_d_reg_offset * 7);
-
-            st_acc[1][8]  = exp2(scale * st_acc[1][8]  - lse_d[0][0]);
-            st_acc[1][9]  = exp2(scale * st_acc[1][9]  - lse_d[0][1]);
-            st_acc[1][10] = exp2(scale * st_acc[1][10] - lse_d[0][2]);
-            st_acc[1][11] = exp2(scale * st_acc[1][11] - lse_d[0][3]);
-            st_acc[1][12] = exp2(scale * st_acc[1][12] - lse_d[1][0]);
-            st_acc[1][13] = exp2(scale * st_acc[1][13] - lse_d[1][1]);
-            st_acc[1][14] = exp2(scale * st_acc[1][14] - lse_d[1][2]);
-#endif
-            st_acc[1][15] = exp2(scale * st_acc[1][15] - lse_d[1][3]);
-
-            // gemm1
-            bfloat16x4 pt_reg_gemm1;
-            floatx4 do_reg_gemm1_tmp;
-            uint2 do_reg_transpose_gemm1[2];
-            bfloat16x4 do_reg_gemm1[2];
-
+            
+            floatx4 lse_d;
 #pragma unroll
-            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < 2; i_st_acc_reg_k++)
+            for(int i_pt = 0; i_pt < st_acc_num; i_pt++)
             {
 #pragma unroll
-                for(int i_st_acc = 0; i_st_acc < 4; i_st_acc++)
+                for(int i_pt_vec = 0; i_pt_vec < kGemm0Gemm2Gemm4AccNum; i_pt_vec += 4)
+                {
+                    lse_d = *reinterpret_cast<floatx4*>(lse_smem + lse_d_lds_read_offset);
+                    lse_smem += lse_d_reg_offset;
+
+                    st_acc[i_pt][0 + i_pt_vec] = exp2(scale * st_acc[i_pt][0 + i_pt_vec] - lse_d[0]);
+                    st_acc[i_pt][1 + i_pt_vec] = exp2(scale * st_acc[i_pt][1 + i_pt_vec] - lse_d[1]);
+                    st_acc[i_pt][2 + i_pt_vec] = exp2(scale * st_acc[i_pt][2 + i_pt_vec] - lse_d[2]);
+                    st_acc[i_pt][3 + i_pt_vec] = exp2(scale * st_acc[i_pt][3 + i_pt_vec] - lse_d[3]);
+                }    
+            }
+
+#if 0
+            if(threadIdx.x == 0)
+            {
+                printf("thread=%d, st_acc[0]=[%f,%f,%f,%f]\n",
+                    type_convert<int>(threadIdx.x),
+                    st_acc[0][0],
+                    st_acc[0][1],
+                    st_acc[0][2],
+                    st_acc[0][3]);
+                
+            }
+#endif
+
+            // gemm1
+            constexpr int do_gemm1_q_gemm3_reg_num = 2;
+            constexpr int gemm1_gemm3_k_inner_loop = kM0 / (st_acc_num * kGemm1Gemm3WarpKInst);
+            bfloat16x4 pt_reg_gemm1;
+            q_gemm3_do_gemm1_vec_type do_reg_gemm1_tmp[4];
+            uint2 do_reg_transpose_gemm1[do_gemm1_q_gemm3_reg_num];
+            bfloat16x4 do_reg_gemm1[do_gemm1_q_gemm3_reg_num];
+
+#pragma unroll
+            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < st_acc_num; i_st_acc_reg_k++)
+            {
+#pragma unroll
+                for(int i_st_acc = 0; i_st_acc < gemm1_gemm3_k_inner_loop; i_st_acc++)
                 {
 #if 1
-                    do_reg_gemm1_tmp[0] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset);
-                    do_reg_gemm1_tmp[1] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset);
-                    do_reg_gemm1_tmp[2] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2);
-                    do_reg_gemm1_tmp[3] = *reinterpret_cast<float*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3);
+                    do_reg_gemm1_tmp[0] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(do_smem + q_gemm3_do_gemm1_offset);
+                    do_reg_gemm1_tmp[1] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset);
+                    do_reg_gemm1_tmp[2] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2);
+                    do_reg_gemm1_tmp[3] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(do_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3);
 #endif
 
                     pt_reg_gemm1[0] = type_convert<bf16_t, float>(st_acc[i_st_acc_reg_k][0 + st_acc_gemmk_offset * i_st_acc]);
@@ -1037,119 +1154,169 @@ struct FmhaBwdDQDKDVKernel
                     pt_reg_gemm1[2] = type_convert<bf16_t, float>(st_acc[i_st_acc_reg_k][2 + st_acc_gemmk_offset * i_st_acc]);
                     pt_reg_gemm1[3] = type_convert<bf16_t, float>(st_acc[i_st_acc_reg_k][3 + st_acc_gemmk_offset * i_st_acc]);
 
-                    do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m0);
-                    do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m0);
-                    do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m1);
-                    do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m1);
+                    if constexpr(dv_acc_num == 2)
+                    {
+                        do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m0);
+                        do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m0);
+                        do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m1);
+                        do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m1);
 
-                    do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
-                    do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
-            
-                    dv_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0], 0, 0, 0);
-                    dv_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1], 0, 0, 0);
+                        do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+                        do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
+           
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0]);
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1]);
+                    }
+                    else if constexpr(dv_acc_num == 4)
+                    {
+                        do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].x), m0);
+                        do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].x), m0);
+                        do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].x), m1);
+                        do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].x), m1);
+
+                        do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+                        do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
+           
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[0]);
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[1]);
+                        
+                        do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].y), m0);
+                        do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].y), m0);
+                        do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].y), m1);
+                        do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].y), m1);
+
+                        do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+                        do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
+           
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dv_acc[2]);
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dv_acc[3]);
+                    }
 
                     do_smem += q_gemm3_do_gemm1_gemmk_offset;
                 }
             }
 
-            do_smem -= q_gemm3_do_gemm1_gemmk_offset * 8;
+#if 0
+            printf("thread=%d, q_gemm3_do_gemm1_offset=%d\n",
+                type_convert<int>(threadIdx.x),
+                q_gemm3_do_gemm1_offset);
+
+            printf("thread=%d, dv_acc[0]=[%f,%f,%f,%f]\n",
+                type_convert<int>(threadIdx.x),
+                dv_acc[0][0],
+                dv_acc[0][1],
+                dv_acc[0][2],
+                dv_acc[0][3]);
+#endif
+
+            do_smem -= q_gemm3_do_gemm1_gemmk_offset * (st_acc_num * gemm1_gemm3_k_inner_loop);
 
             // gemm 2
-            CVecType dpt_acc[2];
-            dpt_acc[0] = {0};
-            dpt_acc[1] = {0};
+            CVecType dpt_acc[st_acc_num];
+#pragma unroll
+            for(int i = 0; i < st_acc_num; i++)
+            {
+                dpt_acc[i] = {0};
+            }
+
+#pragma unroll
+            for(int i_dpt_acc = 0; i_dpt_acc < st_acc_num; i_dpt_acc++)
+            {
 #if 1
-            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset);
-            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset);
-            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset);
-            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset);
+#pragma unroll
+                for(int i = 0; i < q_gemm0_reg_num; i++)
+                {
+                    q_reg_gemm0[i] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * i + q_gemm0_do_gemm2_reg_offset * i_dpt_acc);
+                }
 #endif
 
 #if 1
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[0].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], vt_reg_gemm2[0].xy[1], dpt_acc[1], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[1].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[1].xy[1], dpt_acc[1], 0, 0, 0);
+#pragma unroll
+                for(int i = 0; i < kGemm0Gemm2KLoops; i++)
+                {
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[0], vt_reg_gemm2[i].xy[0], dpt_acc[i_dpt_acc]);
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(q_reg_gemm0[i].xy[1], vt_reg_gemm2[i].xy[1], dpt_acc[i_dpt_acc]);
+                }
 #endif
-
-#if 1
-            q_reg_gemm0[0] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
-            q_reg_gemm0[1] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 2);
-            q_reg_gemm0[2] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
-            q_reg_gemm0[3] = *reinterpret_cast<_BF16x8_t*>(do_smem + q_gemm0_do_gemm2_offset + q_gemm0_do_gemm2_reg_offset + q_gemm0_do_gemm2_gemmk_offset * 3);
-#endif
-
-#if 1
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[0].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[0], vt_reg_gemm2[2].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[1].xy[1], vt_reg_gemm2[2].xy[1], dpt_acc[1], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[0], 0, 0, 0);
-            dpt_acc[0] = GCN_MFMA_INSTR(q_reg_gemm0[2].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[0], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[0], vt_reg_gemm2[3].xy[0], dpt_acc[1], 0, 0, 0);
-            dpt_acc[1] = GCN_MFMA_INSTR(q_reg_gemm0[3].xy[1], vt_reg_gemm2[3].xy[1], dpt_acc[1], 0, 0, 0);
-#endif
+            }
 
 #if 1
             // ds
 #pragma unroll
-            for(int i_dpt = 0; i_dpt < 2; i_dpt++)
+            for(int i_dpt = 0; i_dpt < st_acc_num; i_dpt++)
             {
 #pragma unroll
-                for(int i_dpt_vec = 0; i_dpt_vec < 16; i_dpt_vec += 8)
+                for(int i_dpt_vec = 0; i_dpt_vec < kGemm0Gemm2Gemm4AccNum; i_dpt_vec += 4)
                 {
-                    lse_d[0] = *reinterpret_cast<floatx4*>(d_smem + lse_d_lds_read_offset);
-                    d_smem += lse_d_reg_offset;
-                    lse_d[1] = *reinterpret_cast<floatx4*>(d_smem + lse_d_lds_read_offset);
+                    lse_d = *reinterpret_cast<floatx4*>(d_smem + lse_d_lds_read_offset);
                     d_smem += lse_d_reg_offset;
 
-                    dpt_acc[i_dpt][0 + i_dpt_vec] = st_acc[i_dpt][0 + i_dpt_vec] * (dpt_acc[i_dpt][0 + i_dpt_vec] - lse_d[0][0]);
-                    dpt_acc[i_dpt][1 + i_dpt_vec] = st_acc[i_dpt][1 + i_dpt_vec] * (dpt_acc[i_dpt][1 + i_dpt_vec] - lse_d[0][1]);
-                    dpt_acc[i_dpt][2 + i_dpt_vec] = st_acc[i_dpt][2 + i_dpt_vec] * (dpt_acc[i_dpt][2 + i_dpt_vec] - lse_d[0][2]);
-                    dpt_acc[i_dpt][3 + i_dpt_vec] = st_acc[i_dpt][3 + i_dpt_vec] * (dpt_acc[i_dpt][3 + i_dpt_vec] - lse_d[0][3]);
-                    dpt_acc[i_dpt][4 + i_dpt_vec] = st_acc[i_dpt][4 + i_dpt_vec] * (dpt_acc[i_dpt][4 + i_dpt_vec] - lse_d[1][0]);
-                    dpt_acc[i_dpt][5 + i_dpt_vec] = st_acc[i_dpt][5 + i_dpt_vec] * (dpt_acc[i_dpt][5 + i_dpt_vec] - lse_d[1][1]);
-                    dpt_acc[i_dpt][6 + i_dpt_vec] = st_acc[i_dpt][6 + i_dpt_vec] * (dpt_acc[i_dpt][6 + i_dpt_vec] - lse_d[1][2]);
-                    dpt_acc[i_dpt][7 + i_dpt_vec] = st_acc[i_dpt][7 + i_dpt_vec] * (dpt_acc[i_dpt][7 + i_dpt_vec] - lse_d[1][3]);
+                    dpt_acc[i_dpt][0 + i_dpt_vec] = st_acc[i_dpt][0 + i_dpt_vec] * (dpt_acc[i_dpt][0 + i_dpt_vec] - lse_d[0]);
+                    dpt_acc[i_dpt][1 + i_dpt_vec] = st_acc[i_dpt][1 + i_dpt_vec] * (dpt_acc[i_dpt][1 + i_dpt_vec] - lse_d[1]);
+                    dpt_acc[i_dpt][2 + i_dpt_vec] = st_acc[i_dpt][2 + i_dpt_vec] * (dpt_acc[i_dpt][2 + i_dpt_vec] - lse_d[2]);
+                    dpt_acc[i_dpt][3 + i_dpt_vec] = st_acc[i_dpt][3 + i_dpt_vec] * (dpt_acc[i_dpt][3 + i_dpt_vec] - lse_d[3]);
                 }    
             }
 #endif
 
             // gemm 3
 #pragma unroll
-            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < 2; i_st_acc_reg_k++)
+            for(int i_st_acc_reg_k = 0; i_st_acc_reg_k < st_acc_num; i_st_acc_reg_k++)
             {
 #pragma unroll
-                for(int i_st_acc = 0; i_st_acc < 4; i_st_acc++)
+                for(int i_st_acc = 0; i_st_acc < gemm1_gemm3_k_inner_loop; i_st_acc++)
                 {
 #if 1 
-                    do_reg_gemm1_tmp[0] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset);
-                    do_reg_gemm1_tmp[1] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset);
-                    do_reg_gemm1_tmp[2] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2);
-                    do_reg_gemm1_tmp[3] = *reinterpret_cast<float*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3);
+                    do_reg_gemm1_tmp[0] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(q_smem + q_gemm3_do_gemm1_offset);
+                    do_reg_gemm1_tmp[1] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset);
+                    do_reg_gemm1_tmp[2] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 2);
+                    do_reg_gemm1_tmp[3] = *reinterpret_cast<q_gemm3_do_gemm1_vec_type*>(q_smem + q_gemm3_do_gemm1_offset + q_gemm3_do_gemm1_reg_offset * 3);
 #endif
 
                     pt_reg_gemm1[0] = type_convert<bf16_t, float>(dpt_acc[i_st_acc_reg_k][0 + st_acc_gemmk_offset * i_st_acc]);
                     pt_reg_gemm1[1] = type_convert<bf16_t, float>(dpt_acc[i_st_acc_reg_k][1 + st_acc_gemmk_offset * i_st_acc]);
                     pt_reg_gemm1[2] = type_convert<bf16_t, float>(dpt_acc[i_st_acc_reg_k][2 + st_acc_gemmk_offset * i_st_acc]);
                     pt_reg_gemm1[3] = type_convert<bf16_t, float>(dpt_acc[i_st_acc_reg_k][3 + st_acc_gemmk_offset * i_st_acc]);
+                    
+                    if constexpr(dk_acc_num == 2)
+                    {
+                        do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m0);
+                        do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m0);
+                        do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m1);
+                        do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m1);
 
-                    do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m0);
-                    do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m0);
-                    do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1]), bit_cast<uint32_t>(do_reg_gemm1_tmp[0]), m1);
-                    do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3]), bit_cast<uint32_t>(do_reg_gemm1_tmp[2]), m1);
+                        do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+                        do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
 
-                    do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
-                    do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
-            
-                    dk_acc[0] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0], 0, 0, 0);
-                    dk_acc[1] = GCN_MFMA_INSTR(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1], 0, 0, 0);
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0]);
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1]);
+                    }
+                    else if constexpr(dk_acc_num == 4)
+                    {
+                        do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].x), m0);
+                        do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].x), m0);
+                        do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].x), m1);
+                        do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].x), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].x), m1);
 
-#if 1
+                        do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+                        do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
+
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[0]);
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[1]);
+
+                        do_reg_transpose_gemm1[0].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].y), m0);
+                        do_reg_transpose_gemm1[0].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].y), m0);
+                        do_reg_transpose_gemm1[1].x = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[1].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[0].y), m1);
+                        do_reg_transpose_gemm1[1].y = __builtin_amdgcn_perm(bit_cast<uint32_t>(do_reg_gemm1_tmp[3].y), bit_cast<uint32_t>(do_reg_gemm1_tmp[2].y), m1);
+
+                        do_reg_gemm1[0] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[0]);
+                        do_reg_gemm1[1] = bit_cast<bfloat16x4>(do_reg_transpose_gemm1[1]);
+
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[0], dk_acc[2]);
+                        Gemm1Gemm3MfmaInstr::mfma_run(pt_reg_gemm1, do_reg_gemm1[1], dk_acc[3]);
+                    }
+
+#if DS_LDS_WRITE
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k) = pt_reg_gemm1[0];
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset) = pt_reg_gemm1[1];
                     *reinterpret_cast<bf16_t*>(ds_smem + ds_lds_write_offset + ds_lds_gemm_m_group_offset * i_st_acc + ds_lds_gemm_m_acc_reg_offset * i_st_acc_reg_k + ds_lds_write_reg_offset * 2) = pt_reg_gemm1[2];
@@ -1159,66 +1326,105 @@ struct FmhaBwdDQDKDVKernel
                     q_smem += q_gemm3_do_gemm1_gemmk_offset;
                 }
             }
-
+#if 0
+            printf("thread=%d, st_acc_num=%d, gemm1_gemm3_k_inner_loop=%d, ds_lds_write_offset=%d, ds_lds_gemm_m_group_offset=%d, ds_lds_gemm_m_acc_reg_offset=%d, ds_lds_write_reg_offset=%d\n",
+                type_convert<int>(threadIdx.x),
+                st_acc_num,
+                gemm1_gemm3_k_inner_loop,
+                ds_lds_write_offset,
+                ds_lds_gemm_m_group_offset,
+                ds_lds_gemm_m_acc_reg_offset,
+                ds_lds_write_reg_offset);
+#endif
             // gemm 4
-            bfloat16x4 dp_reg_gemm4[2];
-            st_acc[0] = {0};
+            constexpr int dp_gemm4_reg_num = 2;
+            constexpr int dq_acc_num = kQKHeaddim * kM0 / (kGemm4rm * kGemm4rn * kGemm0Gemm2Gemm4WarpM * kGemm0Gemm2Gemm4WarpN);
+            bfloat16x4 dp_reg_gemm4[dp_gemm4_reg_num];
+#pragma unroll
+            for(int i = 0; i < dq_acc_num; i++)
+            {
+                st_acc[st_acc_num - dq_acc_num + i] = {0};
+            }
 
             __syncthreads();
-            int i_k_gemmk_gemm4 = 0;
 
 #pragma unroll
-            for(int i_gemm4_k = 0; i_gemm4_k < 128; i_gemm4_k += 16)
+            for(int i_dq_acc = 0; i_dq_acc < dq_acc_num; i_dq_acc++)
+            //for(int i_dq_acc = 0; i_dq_acc < 1; i_dq_acc++)
             {
+#pragma unroll
+                for(int i_gemm4_k = 0; i_gemm4_k < kN0; i_gemm4_k += kGemm0Gemm2Gemm4WarpK)
+                {
 #if 1
-                dp_reg_gemm4[0] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
-                ds_smem += ds_gemm4_kiter_offset;
-                dp_reg_gemm4[1] = *reinterpret_cast<bfloat16x4*>(ds_smem + ds_gemm4_offset);
-                ds_smem += ds_gemm4_kiter_offset;
+                    dp_reg_gemm4[0] = *reinterpret_cast<bfloat16x4*>(ds_smem + i_dq_acc * dq_acc_reg_offset + ds_gemm4_kiter_offset * (i_gemm4_k / kGemm0Gemm2Gemm4WarpKInst) + ds_gemm4_offset);
+                    // ds_smem += ds_gemm4_kiter_offset;
+                    dp_reg_gemm4[1] = *reinterpret_cast<bfloat16x4*>(ds_smem + i_dq_acc * dq_acc_reg_offset + ds_gemm4_kiter_offset * (i_gemm4_k / kGemm0Gemm2Gemm4WarpKInst + 1) + ds_gemm4_offset);
+                    // ds_smem += ds_gemm4_kiter_offset;
 #else
-                dp_reg_gemm4[0] = {1};
-                ds_smem += ds_gemm4_kiter_offset + ds_gemm4_offset;
-                dp_reg_gemm4[1] = {1};
-                ds_smem += ds_gemm4_kiter_offset;
+                    dp_reg_gemm4[0] = {1};
+                    ds_smem += ds_gemm4_kiter_offset + ds_gemm4_offset;
+                    dp_reg_gemm4[1] = {1};
+                    ds_smem += ds_gemm4_kiter_offset;
 
 #endif
-                
-                st_acc[0] = GCN_MFMA_INSTR(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
-                i_k_gemmk_gemm4++;
-                st_acc[0] = GCN_MFMA_INSTR(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_k_gemmk_gemm4]), st_acc[0], 0, 0, 0);
-                i_k_gemmk_gemm4++;
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(dp_reg_gemm4[0], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_gemm4_k / kGemm0Gemm2Gemm4WarpKInst]), st_acc[st_acc_num - dq_acc_num + i_dq_acc]);
+                    Gemm0Gemm2Gemm4MfmaInstr::mfma_run(dp_reg_gemm4[1], bit_cast<bfloat16x4>(k_reg_to_gemm4[i_gemm4_k / kGemm0Gemm2Gemm4WarpKInst + 1]), st_acc[st_acc_num - dq_acc_num + i_dq_acc]);
+                }
             }
+
+#if 0
+            printf("thread=%d, dq_acc[2,3]=[%f,%f,%f,%f,%f,%f,%f,%f], dp_reg_gemm4=[%f,%f,%f,%f], dq_acc_reg_offset=%d\n",
+                type_convert<int>(threadIdx.x),
+                st_acc[2][0],
+                st_acc[2][1],
+                st_acc[2][2],
+                st_acc[2][3],
+                st_acc[3][0],
+                st_acc[3][1],
+                st_acc[3][2],
+                st_acc[3][3],
+                type_convert<float>(dp_reg_gemm4[1][0]),
+                type_convert<float>(dp_reg_gemm4[1][1]),
+                type_convert<float>(dp_reg_gemm4[1][2]),
+                type_convert<float>(dp_reg_gemm4[1][3]),
+                dq_acc_reg_offset
+                );
+#endif
 
 #pragma unroll
-            for(int i_dq_acc = 0; i_dq_acc < 4; i_dq_acc++)
+            for(int i_dq_acc = 0; i_dq_acc < dq_acc_num; i_dq_acc++)
             {
+#pragma unroll
+                for(int i_dq_vec = 0; i_dq_vec < (kGemm0Gemm2Gemm4AccNum / 4); i_dq_vec++)
+                {
 #if 0
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 2] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
-                *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale;
-                dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 2] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale;
+                    dq_acc_ptr_tmp += kargs.stride_q;
 #else
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 0] * kargs.raw_scale);
-                dq_acc_ptr_tmp += kargs.stride_q;
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 1] * kargs.raw_scale);
-                dq_acc_ptr_tmp += kargs.stride_q;
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 2] * kargs.raw_scale);
-                dq_acc_ptr_tmp += kargs.stride_q;
-                unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[0][i_dq_acc * 4 + 3] * kargs.raw_scale);
-                dq_acc_ptr_tmp += 5 * kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 0] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 1] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 2] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += kargs.stride_q;
+                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 3] * kargs.raw_scale);
+                    dq_acc_ptr_tmp += (kGemm4GroupM - 3) * kargs.stride_q;
 #endif
+                }
+                dq_acc_ptr_tmp += kGemm0Gemm2Gemm4WarpM * (kGemm4rm - 1) * kargs.stride_q;
             }
-            dq_acc_ptr_tmp += 32 * kargs.stride_q;
-            
+
             __syncthreads();
 
             float4 q_do_swap_tmp;
 #pragma unroll
-            for(int i_qdo_reg = 0; i_qdo_reg < 2; i_qdo_reg++)
+            for(int i_qdo_reg = 0; i_qdo_reg < q_do_global_num; i_qdo_reg++)
             {
                 // q reg
                 q_do_swap_tmp = q_reg_tmp[i_qdo_reg];
@@ -1230,60 +1436,120 @@ struct FmhaBwdDQDKDVKernel
                 do_reg[i_qdo_reg] = q_do_swap_tmp;
             }
 
+            float lse_d_swap_tmp;
+            lse_d_swap_tmp = lse_reg_tmp;
+            lse_reg_tmp = lse_reg;
+            lse_reg = lse_d_swap_tmp;
+            lse_d_swap_tmp = d_reg_tmp;
+            d_reg_tmp = d_reg;
+            d_reg = lse_d_swap_tmp;
+
+
             i_total_loops += 1;
             // seqlen_q_step += kM0;
             
         } while(i_total_loops < (num_total_loop - 0));
 
         // write out dv
+        constexpr int dv_dk_acc_vec_size = kVHeaddim / (kGemm1Gemm3rn * kGemm1Gemm3WarpN);
         const int& stride_v_seq = kargs.stride_v;
-        int dv_hbm_offset = n_id * 2 + k0_id * stride_v_seq * 4;
+        int dv_hbm_offset = n_id * dv_dk_acc_vec_size + k0_id * stride_v_seq * 4;
 
         // const int dv_hbm_reg_offset = stride_v_seq;
         // const int dv_hbm_a_group_offset = stride_v_seq * 8;
-        const int wave_offset_gemm1_gemm3 = wave_id * 32 * stride_v_seq;
+        const int wave_offset_gemm1_gemm3 = wave_id * kGemm1Gemm3WarpM * stride_v_seq;
         dv_hbm_offset += wave_offset_gemm1_gemm3;
         const int reg_offset_gemm1_gemm3 = stride_v_seq;
-        const int group_offset_gemm1_gemm3 = stride_v_seq * 8;
+        const int group_offset_gemm1_gemm3 = stride_v_seq * (kGemm1Gemm3WarpM / kGemm1Gemm3AccNum) * 4;
         
         dv_ptr += i_n0 * kargs.stride_k;
 #pragma unroll
-        for (int i_dv = 0; i_dv < 4; i_dv++)
+        for (int i_dv = 0; i_dv < (kGemm1Gemm3AccNum / 4); i_dv++)
         {
-            uint32_t dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4]), m1);
-            char* dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv);
-            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
-            dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 1]), m1);
-            dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3);
-            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
-            dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 2]), m1);
-            dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2);
-            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
-            dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 3]), m1);
-            dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3);
-            *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+            if constexpr(dv_acc_num == 2)
+            {
+                uint32_t dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4]), m1);
+                char* dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv);
+                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+                dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 1]), m1);
+                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3);
+                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+                dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 2]), m1);
+                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2);
+                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+                dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 3]), m1);
+                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3);
+                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+            }
+            else if constexpr(dv_acc_num == 4)
+            {
+                uint2 dv_pack;
+                dv_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4]), m1);
+                dv_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[3][i_dv * 4]), bit_cast<uint32_t>(dv_acc[2][i_dv * 4]), m1);
+                char* dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv);
+                *reinterpret_cast<uint2*>(dv_ptr_tmp) = bit_cast<uint2>(dv_pack);
+                dv_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 1]), m1);
+                dv_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[3][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[2][i_dv * 4 + 1]), m1);
+                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3);
+                *reinterpret_cast<uint2*>(dv_ptr_tmp) = bit_cast<uint2>(dv_pack);
+                dv_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 2]), m1);
+                dv_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[3][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[2][i_dv * 4 + 2]), m1);
+                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2);
+                *reinterpret_cast<uint2*>(dv_ptr_tmp) = bit_cast<uint2>(dv_pack);
+                dv_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 3]), m1);
+                dv_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[3][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[2][i_dv * 4 + 3]), m1);
+                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3);
+                *reinterpret_cast<uint2*>(dv_ptr_tmp) = bit_cast<uint2>(dv_pack);
+
+            }
         }
 
         // dk = dk * scale
-        dk_acc[0] *= kargs.raw_scale;
-        dk_acc[1] *= kargs.raw_scale;
+#pragma unroll
+        for(int i = 0; i < dk_acc_num; i++)
+        {
+            dk_acc[i] *= kargs.raw_scale;
+        }
         
         dk_ptr += i_n0 * kargs.stride_k;
 #pragma unroll
-        for (int i_dk = 0; i_dk < 4; i_dk++)
+        for (int i_dk = 0; i_dk < (kGemm1Gemm3AccNum / 4); i_dk++)
         {
-            uint32_t dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4]), m1);
-            char* dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk);
-            *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
-            dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 1]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 1]), m1);
-            dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3);
-            *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
-            dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 2]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 2]), m1);
-            dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 2);
-            *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
-            dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 3]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 3]), m1);
-            dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 3);
-            *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+            if constexpr(dk_acc_num == 2)
+            {
+                uint32_t dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4]), m1);
+                char* dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk);
+                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+                dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 1]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 1]), m1);
+                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3);
+                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+                dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 2]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 2]), m1);
+                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 2);
+                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+                dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 3]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 3]), m1);
+                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 3);
+                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+            }
+            else if constexpr(dk_acc_num == 4)
+            {
+                uint2 dk_pack;
+                dk_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4]), m1);
+                dk_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[3][i_dk * 4]), bit_cast<uint32_t>(dk_acc[2][i_dk * 4]), m1);
+                char* dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk);
+                *reinterpret_cast<uint2*>(dk_ptr_tmp) = bit_cast<uint2>(dk_pack);
+                dk_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 1]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 1]), m1);
+                dk_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[3][i_dk * 4 + 1]), bit_cast<uint32_t>(dk_acc[2][i_dk * 4 + 1]), m1);
+                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3);
+                *reinterpret_cast<uint2*>(dk_ptr_tmp) = bit_cast<uint2>(dk_pack);
+                dk_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 2]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 2]), m1);
+                dk_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[3][i_dk * 4 + 2]), bit_cast<uint32_t>(dk_acc[2][i_dk * 4 + 2]), m1);
+                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 2);
+                *reinterpret_cast<uint2*>(dk_ptr_tmp) = bit_cast<uint2>(dk_pack);
+                dk_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 3]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 3]), m1);
+                dk_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[3][i_dk * 4 + 3]), bit_cast<uint32_t>(dk_acc[2][i_dk * 4 + 3]), m1);
+                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 3);
+                *reinterpret_cast<uint2*>(dk_ptr_tmp) = bit_cast<uint2>(dk_pack);
+            }
         }
         
 
@@ -2069,8 +2335,8 @@ struct FmhaBwdConvertQGradKernel
         // divide problem
         const auto [i_tile_m, i_nhead, i_batch] = TilePartitioner{}(kargs.seqlen_q);
 
-        // const index_t i_m0 = __builtin_amdgcn_readfirstlane(i_tile_m * kM0);
-        const index_t i_m0 = __builtin_amdgcn_readfirstlane(i_tile_m * 1);
+        const index_t i_m0 = __builtin_amdgcn_readfirstlane(i_tile_m * kM0);
+        // const index_t i_m0 = __builtin_amdgcn_readfirstlane(i_tile_m * 1);
 
         long_index_t batch_offset_dq = 0;
         if constexpr(kIsGroupMode)
@@ -2079,6 +2345,8 @@ struct FmhaBwdConvertQGradKernel
             const long_index_t query_start = kargs.seqstart_q_ptr[i_batch];
             batch_offset_dq                = query_start * kargs.stride_dq;
 
+            const int num_head_q = kargs.stride_dq / kargs.hdim_q;
+
             // get real # queries & # keys under group mode
             const auto adjusted_seqstart_q_ptr = kargs.seqstart_q_ptr + i_batch;
             kargs.seqlen_q = adjusted_seqstart_q_ptr[1] - adjusted_seqstart_q_ptr[0];
@@ -2086,7 +2354,8 @@ struct FmhaBwdConvertQGradKernel
             kargs.seqlen_k = adjusted_seqstart_k_ptr[1] - adjusted_seqstart_k_ptr[0];
             // # of required blocks is different in each groups, terminate unnecessary blocks
             // earlier
-            if(kargs.seqlen_q <= i_m0)
+            //if(kargs.seqlen_q <= i_m0)
+            if(kargs.seqlen_q * num_head_q <= i_m0)
             {
                 return;
             }
@@ -2176,47 +2445,67 @@ struct FmhaBwdConvertQGradKernel
         }
         else
         {
+
+#if 1
             const AccDataType* dq_acc_ptr =
                 reinterpret_cast<const AccDataType*>(kargs.dq_acc_ptr) +
                 static_cast<long_index_t>(i_nhead) * (kargs.nhead_stride_dq) + batch_offset_dq;
 
-            
-            dq_ptr += kargs.stride_dq * i_m0;
-            dq_acc_ptr += kargs.stride_dq * i_m0;
+            dq_ptr += kQKHeaddim * i_m0;
+            dq_acc_ptr += kQKHeaddim * i_m0;
             constexpr int32_t m1 = 0x07060302;
             int reg_offset = threadIdx.x * 4;
             int reg_offset_acc = reg_offset;
-            int num_head_q = kargs.stride_dq / kargs.hdim_q;
-            constexpr int dq_unroll = 4;
-            float4 dq_acc_reg[dq_unroll];
-            float2 dq_reg[dq_unroll];
+            // int num_head_q = kargs.stride_dq / kargs.hdim_q;
+
+            // const int convert_dq_range = num_head_q * kargs.seqlen_q;
 
             char* dq_ptr_tmp;
 
-            for(int i = 0; i < num_head_q; i += 16 * dq_unroll)
+            constexpr int dq_reg_num = kM0 * kQKHeaddim * sizeof(AccDataType) / (kBlockSize * sizeof(float4));
+            constexpr int dq_reg_offset = (kBlockSize * sizeof(float4)) / sizeof(AccDataType);
+            float4 dq_acc_reg[dq_reg_num];
+            float2 dq_reg[dq_reg_num];
+
+#if 0
+            if(blockIdx.x == 1)
             {
+                printf("im0=%d, threadIdx.x=%d, reg_offset=%d, dq_reg_offset=%d\n",
+                    i_m0, type_convert<int>(threadIdx.x), reg_offset, dq_reg_offset);
+            }
+#endif
+
 #pragma unroll
-                for(int j = 0; j < dq_unroll; j++)
-                {
-                    dq_acc_reg[j] = *reinterpret_cast<const float4*>(dq_acc_ptr + reg_offset_acc);
-                    reg_offset_acc += 16 * 64;
-                }
-#pragma unroll
-                for(int j = 0; j < dq_unroll; j++)
-                {
-                    dq_reg[j].x = bit_cast<float>(__builtin_amdgcn_perm(bit_cast<uint32_t>(dq_acc_reg[j].y), bit_cast<uint32_t>(dq_acc_reg[j].x), m1));
-                    dq_reg[j].y = bit_cast<float>(__builtin_amdgcn_perm(bit_cast<uint32_t>(dq_acc_reg[j].w), bit_cast<uint32_t>(dq_acc_reg[j].z), m1));
-                }
-#pragma unroll
-                for(int j = 0; j < dq_unroll; j++)
-                {
-                    dq_ptr_tmp = reinterpret_cast<char*>(dq_ptr + reg_offset);
-                    *reinterpret_cast<float2*>(dq_ptr_tmp) = dq_reg[j];
-                    reg_offset += 16 * 64;
-                }
+            for(int i = 0; i < dq_reg_num; i++)
+            {
+                dq_acc_reg[i] = *reinterpret_cast<const float4*>(dq_acc_ptr + reg_offset_acc);
+                dq_acc_ptr += dq_reg_offset;
             }
 
-            // FmhaBwdConvertQGrad{}(dq_acc_dram_window, dq_dram_window);
+#pragma unroll
+            for(int i = 0; i < dq_reg_num; i++)
+            {
+                dq_reg[i].x = bit_cast<float>(__builtin_amdgcn_perm(bit_cast<uint32_t>(dq_acc_reg[i].y), bit_cast<uint32_t>(dq_acc_reg[i].x), m1));
+                dq_reg[i].y = bit_cast<float>(__builtin_amdgcn_perm(bit_cast<uint32_t>(dq_acc_reg[i].w), bit_cast<uint32_t>(dq_acc_reg[i].z), m1));
+            }
+
+#pragma unroll
+            for(int i = 0; i < dq_reg_num; i++)
+            {
+                dq_ptr_tmp = reinterpret_cast<char*>(dq_ptr + reg_offset);
+                *reinterpret_cast<float2*>(dq_ptr_tmp) = dq_reg[i];
+                dq_ptr += dq_reg_offset;
+            }
+#if 0
+            if(threadIdx.x == 0)
+            {
+                printf("hhhh\n");
+            }
+#endif
+
+#else
+            FmhaBwdConvertQGrad{}(dq_acc_dram_window, dq_dram_window);
+#endif
         }
     }
 };
