@@ -935,7 +935,7 @@ struct FmhaBwdDQDKDVKernel
         constexpr int q_gemm3_do_gemm1_elements = kQKHeaddim / (kGemm1Gemm3WarpN * kGemm1Gemm3rn);
         using q_gemm3_do_gemm1_vec_type = typename QGemm3DOGemm1LdsLoadVecType<QDataType, q_gemm3_do_gemm1_elements>::Type;
         constexpr int q_gemm3_do_gemm1_elements_in_byte = q_gemm3_do_gemm1_elements * sizeof(KDataType);
-        int q_gemm3_do_gemm1_offset = n_id * q_gemm3_do_gemm1_elements_in_byte  + k0_id * (kQKHeaddimBytes + q_do_padding) * q_gemm3_do_gemm1_elements;
+        int q_gemm3_do_gemm1_offset = n_id * q_gemm3_do_gemm1_elements_in_byte  + k0_id * (kQKHeaddimBytes + q_do_padding) * 4;
         constexpr int q_gemm3_do_gemm1_reg_offset = kQKHeaddimBytes + q_do_padding;
         constexpr int q_gemm3_do_gemm1_gemmk_offset = (kQKHeaddimBytes + q_do_padding) * kGemm1Gemm3WarpKInst;
 
