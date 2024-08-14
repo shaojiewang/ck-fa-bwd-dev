@@ -794,11 +794,13 @@ struct FmhaBwdDQDKDVKernel
         constexpr int32_t kQKHeaddimBytes = kQKHeaddim * sizeof(KDataType);
 
         // ptr and buffer res
-        //const int q_acc_range_in_bytes = 
+        // const int q_acc_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(AccDataType) + kQKHeaddimBytes;
+        //const int q_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
         const int k_dk_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_k * sizeof(KDataType) + kQKHeaddimBytes;
-        //int32x4_t q_resource = make_wave_buffer_resource(q_ptr, );
+        const int v_dv_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_v * sizeof(VDataType) + kQKHeaddimBytes;
+        //int32x4_t q_resource = make_wave_buffer_resource(q_ptr, q_range_in_bytes);
         int32x4_t k_resource = make_wave_buffer_resource(k_ptr, k_dk_range_in_bytes);
-        int k_wave_offset = i_n0 * kargs.stride_k * sizeof(KDataType);
+        int32x4_t v_resource = make_wave_buffer_resource(v_ptr, v_dv_range_in_bytes);
 
         // prepare k and v_t in smem
         constexpr int k_reg_num = kN0 * kQKHeaddimBytes / (kBlockSize * sizeof(float4));
@@ -807,26 +809,26 @@ struct FmhaBwdDQDKDVKernel
         constexpr int num_threads_per_hd_global_load = kQKHeaddimBytes / sizeof(float4);
         constexpr int num_threads_per_hd_global_load_minus_1 = num_threads_per_hd_global_load - 1;
         float4 k_reg[k_reg_num];
-        int kv_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * kv_vec_global + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_k;
-        const int kv_reg_offset = kargs.stride_k * k_reg_row;
+        int kv_load_offset = ((threadIdx.x & num_threads_per_hd_global_load_minus_1) * kv_vec_global + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_k)  * sizeof(KDataType);
+        int k_wave_offset = i_n0 * kargs.stride_k * sizeof(KDataType);
+        const int kv_reg_offset = kargs.stride_k * k_reg_row  * sizeof(KDataType);
 
 #pragma unroll
         for(int i_k_reg = 0; i_k_reg < k_reg_num; i_k_reg++)
         {
-            // k_reg[i_k_reg] = *reinterpret_cast<const float4 *>(k_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-            k_reg[i_k_reg] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(k_resource, kv_load_offset * sizeof(KDataType), k_wave_offset, 0));
-            // k_ptr += kv_reg_offset;
-            k_wave_offset += kv_reg_offset * sizeof(KDataType);
+            k_reg[i_k_reg] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(k_resource, kv_load_offset, k_wave_offset, 0));
+            k_wave_offset += kv_reg_offset;
         }
 
         constexpr int v_reg_num = kN0 * kVHeaddim * sizeof(VDataType) / (kBlockSize * sizeof(float4));
+        int v_wave_offset = i_n0 * kargs.stride_v * sizeof(VDataType);
         float4 v_reg[v_reg_num];
 
 #pragma unroll
         for(int i_v_reg = 0; i_v_reg < v_reg_num; i_v_reg++)
         {
-            v_reg[i_v_reg] = *reinterpret_cast<const float4 *>(v_ptr + kv_load_offset + i_n0 * kargs.stride_k);
-            v_ptr += kv_reg_offset;
+            v_reg[i_v_reg] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(v_resource, kv_load_offset, v_wave_offset, 0));
+            v_wave_offset += kv_reg_offset;
         }
 
         char* k_smem = smem_ptr;
