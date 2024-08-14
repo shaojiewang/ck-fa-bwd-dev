@@ -794,13 +794,15 @@ struct FmhaBwdDQDKDVKernel
         constexpr int32_t kQKHeaddimBytes = kQKHeaddim * sizeof(KDataType);
 
         // ptr and buffer res
-        // const int q_acc_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(AccDataType) + kQKHeaddimBytes;
-        //const int q_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
+        //const int q_acc_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(AccDataType) + kQKHeaddimBytes;
+        const int q_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
         const int k_dk_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_k * sizeof(KDataType) + kQKHeaddimBytes;
         const int v_dv_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_v * sizeof(VDataType) + kQKHeaddimBytes;
-        //int32x4_t q_resource = make_wave_buffer_resource(q_ptr, q_range_in_bytes);
+        const int do_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
+        int32x4_t q_resource = make_wave_buffer_resource(q_ptr, q_range_in_bytes);
         int32x4_t k_resource = make_wave_buffer_resource(k_ptr, k_dk_range_in_bytes);
         int32x4_t v_resource = make_wave_buffer_resource(v_ptr, v_dv_range_in_bytes);
+        int32x4_t do_resource = make_wave_buffer_resource(do_ptr, do_range_in_bytes);
 
         // prepare k and v_t in smem
         constexpr int k_reg_num = kN0 * kQKHeaddimBytes / (kBlockSize * sizeof(float4));
@@ -916,8 +918,10 @@ struct FmhaBwdDQDKDVKernel
 
         // loading offset
         constexpr int q_do_reg_rows = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
-        int q_do_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * num_threads_per_hd_global_load + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_q;
-        int q_do_load_reg_offset = kargs.stride_q * q_do_reg_rows;
+        int q_do_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * kv_vec_global + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_q;
+        q_do_load_offset *= sizeof(QDataType);
+        const int q_do_load_reg_offset = kargs.stride_q * q_do_reg_rows * sizeof(QDataType);
+        int q_do_load_wave_offset = 0;
 
         constexpr int st_acc_gemmk_offset = 4;
         
@@ -999,10 +1003,9 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
         for(int i = 0; i < q_do_global_num; i++)
         {
-            q_reg[i] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
-            q_ptr += q_do_load_reg_offset;
-            do_reg[i] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
-            do_ptr += q_do_load_reg_offset;
+            q_reg[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(q_resource, q_do_load_offset, q_do_load_wave_offset, 0));
+            do_reg[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(do_resource, q_do_load_offset, q_do_load_wave_offset, 0));
+            q_do_load_wave_offset += q_do_load_reg_offset;
         }
 
         float lse_reg = 0, d_reg = 0, lse_reg_tmp = 0, d_reg_tmp = 0;
@@ -1041,10 +1044,9 @@ struct FmhaBwdDQDKDVKernel
 #pragma unroll
                 for(int i = 0; i < q_do_global_num; i++)
                 {
-                    q_reg_tmp[i] = *reinterpret_cast<const float4*>(q_ptr + q_do_load_offset);
-                    q_ptr += q_do_load_reg_offset;
-                    do_reg_tmp[i] = *reinterpret_cast<const float4*>(do_ptr + q_do_load_offset);
-                    do_ptr += q_do_load_reg_offset;
+                    q_reg_tmp[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(q_resource, q_do_load_offset, q_do_load_wave_offset, 0));
+                    do_reg_tmp[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(do_resource, q_do_load_offset, q_do_load_wave_offset, 0));
+                    q_do_load_wave_offset += q_do_load_reg_offset;
                 }
 #else
 #pragma unroll
