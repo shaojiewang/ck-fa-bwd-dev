@@ -799,14 +799,15 @@ struct FmhaBwdDQDKDVKernel
         const int k_dk_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_k * sizeof(KDataType) + kQKHeaddimBytes;
         const int v_dv_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_v * sizeof(VDataType) + kQKHeaddimBytes;
         const int do_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
-        //const int lse_range_in_bytes = kargs.seqlen_q * sizeof(LSEDataType);
-        //const int d_range_in_bytes = kargs.seqlen_q * sizeof(DDataType);
+        const int lse_range_in_bytes = kargs.seqlen_q * sizeof(LSEDataType);
+        const int d_range_in_bytes = kargs.seqlen_q * sizeof(DDataType);
         int32x4_t q_resource = make_wave_buffer_resource(q_ptr, q_range_in_bytes);
         int32x4_t k_resource = make_wave_buffer_resource(k_ptr, k_dk_range_in_bytes);
         int32x4_t v_resource = make_wave_buffer_resource(v_ptr, v_dv_range_in_bytes);
         int32x4_t do_resource = make_wave_buffer_resource(do_ptr, do_range_in_bytes);
-        //int32x4_t lse_resource = make_wave_buffer_resource(lse_ptr, lse_range_in_bytes);
-        //int32x4_t d_resource = make_wave_buffer_resource(d_ptr, d_range_in_bytes);
+        int32x4_t lse_resource = make_wave_buffer_resource(lse_ptr, lse_range_in_bytes);
+        int32x4_t d_resource = make_wave_buffer_resource(d_ptr, d_range_in_bytes);
+        bool lse_d_exec_mask = threadIdx.x < kM0;
 
         // prepare k and v_t in smem
         constexpr int k_reg_num = kN0 * kQKHeaddimBytes / (kBlockSize * sizeof(float4));
@@ -971,12 +972,13 @@ struct FmhaBwdDQDKDVKernel
         // lse and d hbm offset and lds write read offset
         // constexpr int lse_d_step_offset = 64 * sizeof(float);
         constexpr int gemm4_groups = 64 / kGemm0Gemm2Gemm4WarpM;
-        constexpr int lse_d_reg_offset = 4 * gemm4_groups * sizeof(float);
-        int lse_d_hbm_offset = threadIdx.x;
-        int lse_d_lds_write_offset = threadIdx.x * sizeof(float);
-        int lse_d_lds_read_offset = k0_id * 4 * sizeof(float);
-        const float* lse_raw = lse_ptr + seqlen_q_start;
-        const float* d_raw = d_ptr + seqlen_q_start;
+        constexpr int lse_d_reg_offset = 4 * gemm4_groups * sizeof(LSEDataType);
+        int lse_d_hbm_offset = threadIdx.x * sizeof(LSEDataType);
+        int lse_d_lds_write_offset = threadIdx.x * sizeof(LSEDataType);
+        int lse_d_lds_read_offset = k0_id * 4 * sizeof(LSEDataType);
+        // const float* lse_raw = lse_ptr + seqlen_q_start;
+        // const float* d_raw = d_ptr + seqlen_q_start;
+        int lse_d_wave_offset = 0;
 
         auto scale = kargs.scale;
 
@@ -1011,10 +1013,9 @@ struct FmhaBwdDQDKDVKernel
         }
 
         float lse_reg = 0, d_reg = 0;
-        lse_reg = threadIdx.x < kM0 ? lse_raw[lse_d_hbm_offset] : 0;
-        lse_raw += kM0;
-        d_reg = threadIdx.x < kM0 ? d_raw[lse_d_hbm_offset] : 0;
-        d_raw += kM0;
+        lse_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(lse_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
+        d_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(d_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
+        lse_d_wave_offset += kM0 * sizeof(LSEDataType);
 
         // reg definitions
         constexpr int st_acc_num = kM0 * kN0 * sizeof(AccDataType) / (kBlockSize * sizeof(CVecType));
@@ -1049,7 +1050,7 @@ struct FmhaBwdDQDKDVKernel
             *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset + kv_smem_reg_offset * i) = do_reg[i];
         }
 #endif
-        if (threadIdx.x < kM0)
+        if (lse_d_exec_mask)
         {
             *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
             *reinterpret_cast<float*>(d_smem + lse_d_lds_write_offset) = d_reg;
@@ -1080,10 +1081,9 @@ struct FmhaBwdDQDKDVKernel
                 }
 #endif
                 // lse and d: HBM->reg->lds
-                lse_reg = threadIdx.x < kM0 ? lse_raw[lse_d_hbm_offset] : 0;
-                lse_raw += kM0;
-                d_reg = threadIdx.x < kM0 ? d_raw[lse_d_hbm_offset] : 0;
-                d_raw += kM0;
+                lse_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(lse_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
+                d_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(d_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
+                lse_d_wave_offset += kM0 * sizeof(LSEDataType);
             
             }
            
@@ -1495,7 +1495,7 @@ struct FmhaBwdDQDKDVKernel
                     *reinterpret_cast<float4*>(do_smem + kvqdo_smem_offset + kv_smem_reg_offset * i) = do_reg[i];
                 }
 #endif
-                if (threadIdx.x < kM0)
+                if (lse_d_exec_mask)
                 {
                     *reinterpret_cast<float*>(lse_smem + lse_d_lds_write_offset) = log2e_v<LSEDataType> * lse_reg;
                     *reinterpret_cast<float*>(d_smem + lse_d_lds_write_offset) = d_reg;
