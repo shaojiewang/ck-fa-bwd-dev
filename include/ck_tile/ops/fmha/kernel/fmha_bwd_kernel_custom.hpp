@@ -794,13 +794,14 @@ struct FmhaBwdDQDKDVKernel
         constexpr int32_t kQKHeaddimBytes = kQKHeaddim * sizeof(KDataType);
 
         // ptr and buffer res
-        //const int q_acc_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(AccDataType) + kQKHeaddimBytes;
+        const int dq_acc_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(AccDataType) + kQKHeaddim * sizeof(AccDataType);
         const int q_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
         const int k_dk_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_k * sizeof(KDataType) + kQKHeaddimBytes;
         const int v_dv_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_v * sizeof(VDataType) + kQKHeaddimBytes;
         const int do_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
         const int lse_range_in_bytes = kargs.seqlen_q * sizeof(LSEDataType);
         const int d_range_in_bytes = kargs.seqlen_q * sizeof(DDataType);
+        int32x4_t dq_acc_resource = make_wave_buffer_resource(dq_acc_ptr_tmp, dq_acc_range_in_bytes);
         int32x4_t q_resource = make_wave_buffer_resource(q_ptr, q_range_in_bytes);
         int32x4_t k_resource = make_wave_buffer_resource(k_ptr, k_dk_range_in_bytes);
         int32x4_t v_resource = make_wave_buffer_resource(v_ptr, v_dv_range_in_bytes);
@@ -933,8 +934,10 @@ struct FmhaBwdDQDKDVKernel
         // hbm store offset
 #if 1 //DQ_ATOMICADD
         int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
-        const int dq_acc_wave_offset = (wave_id / kGemm4rm) * kGemm0Gemm2Gemm4WarpN + (wave_id % kGemm4rm) * kGemm0Gemm2Gemm4WarpM * kargs.stride_q;
-        dq_acc_offset += dq_acc_wave_offset;
+        int dq_acc_wave_offset = __builtin_amdgcn_readfirstlane((wave_id / kGemm4rm) * kGemm0Gemm2Gemm4WarpN + (wave_id % kGemm4rm) * kGemm0Gemm2Gemm4WarpM * kargs.stride_q);
+        const int stride_dq_acc_in_bytes = kargs.stride_q * sizeof(AccDataType);
+        dq_acc_offset *= sizeof(AccDataType);
+        dq_acc_wave_offset *= sizeof(AccDataType);
 #endif
 
         // lds write offset
@@ -1465,17 +1468,33 @@ struct FmhaBwdDQDKDVKernel
                     *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 3] * kargs.raw_scale;
                     dq_acc_ptr_tmp += (kGemm4GroupM - 3) * kargs.stride_q;
 #else
-                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 0] * kargs.raw_scale);
-                    dq_acc_ptr_tmp += kargs.stride_q;
-                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 1] * kargs.raw_scale);
-                    dq_acc_ptr_tmp += kargs.stride_q;
-                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 2] * kargs.raw_scale);
-                    dq_acc_ptr_tmp += kargs.stride_q;
-                    unsafeAtomicAdd(dq_acc_ptr_tmp + dq_acc_offset, st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 3] * kargs.raw_scale);
-                    dq_acc_ptr_tmp += (kGemm4GroupM - 3) * kargs.stride_q;
+                    llvm_amdgcn_raw_buffer_atomic_add_fp32(st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 0] * kargs.raw_scale,
+                                                           dq_acc_resource,
+                                                           dq_acc_offset,
+                                                           dq_acc_wave_offset,
+                                                           0);
+                    dq_acc_wave_offset += stride_dq_acc_in_bytes;
+                    llvm_amdgcn_raw_buffer_atomic_add_fp32(st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 1] * kargs.raw_scale,
+                                                           dq_acc_resource,
+                                                           dq_acc_offset,
+                                                           dq_acc_wave_offset,
+                                                           0);
+                    dq_acc_wave_offset += stride_dq_acc_in_bytes;
+                    llvm_amdgcn_raw_buffer_atomic_add_fp32(st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 2] * kargs.raw_scale,
+                                                           dq_acc_resource,
+                                                           dq_acc_offset,
+                                                           dq_acc_wave_offset,
+                                                           0);
+                    dq_acc_wave_offset += stride_dq_acc_in_bytes;
+                    llvm_amdgcn_raw_buffer_atomic_add_fp32(st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 3] * kargs.raw_scale,
+                                                           dq_acc_resource,
+                                                           dq_acc_offset,
+                                                           dq_acc_wave_offset,
+                                                           0);
+                    dq_acc_wave_offset += (kGemm4GroupM - 3) * stride_dq_acc_in_bytes;
 #endif
                 }
-                dq_acc_ptr_tmp += kGemm0Gemm2Gemm4WarpM * (kGemm4rm - 1) * kargs.stride_q;
+                dq_acc_wave_offset += kGemm0Gemm2Gemm4WarpM * (kGemm4rm - 1) * stride_dq_acc_in_bytes;
             }
 
             __syncthreads();
