@@ -795,7 +795,7 @@ struct FmhaBwdDQDKDVKernel
 
         // ptr and buffer res
         const int q_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
-        const int dq_acc_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(AccDataType) + kQKHeaddim * sizeof(AccDataType);
+        const int dq_acc_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(AccDataType) + kargs.stride_q * sizeof(AccDataType);
         const int k_dk_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_k * sizeof(KDataType) + kQKHeaddimBytes;
         const int v_dv_range_in_bytes = (kargs.seqlen_k - 1) * kargs.stride_v * sizeof(VDataType) + kQKHeaddimBytes;
         const int do_range_in_bytes = (kargs.seqlen_q - 1) * kargs.stride_q * sizeof(QDataType) + kQKHeaddimBytes;
@@ -804,13 +804,27 @@ struct FmhaBwdDQDKDVKernel
         int32x4_t q_resource = make_wave_buffer_resource(q_ptr, q_range_in_bytes);
         int32x4_t dq_acc_resource = make_wave_buffer_resource(dq_acc_ptr_tmp, dq_acc_range_in_bytes);
         int32x4_t k_resource = make_wave_buffer_resource(k_ptr, k_dk_range_in_bytes);
-        int32x4_t dk_resource = make_wave_buffer_resource(dk_ptr + i_n0 * kargs.stride_k, k_dk_range_in_bytes);
+        int32x4_t dk_resource = make_wave_buffer_resource(dk_ptr, k_dk_range_in_bytes);
         int32x4_t v_resource = make_wave_buffer_resource(v_ptr, v_dv_range_in_bytes);
-        int32x4_t dv_resource = make_wave_buffer_resource(dv_ptr + i_n0 * kargs.stride_v, v_dv_range_in_bytes);
+        int32x4_t dv_resource = make_wave_buffer_resource(dv_ptr, v_dv_range_in_bytes);
         int32x4_t do_resource = make_wave_buffer_resource(do_ptr, do_range_in_bytes);
         int32x4_t lse_resource = make_wave_buffer_resource(lse_ptr, lse_range_in_bytes);
         int32x4_t d_resource = make_wave_buffer_resource(d_ptr, d_range_in_bytes);
         bool lse_d_exec_mask = threadIdx.x < kM0;
+
+#if 1
+        if(threadIdx.x == 0)
+        {
+            printf("block=[%d,%d,%d], dq_acc_range_in_bytes=%d, k_dk_range_in_bytes=%d, v_dv_range_in_bytes=%d, do_range_in_bytes=%d\n",
+                type_convert<int>(blockIdx.x),
+                type_convert<int>(blockIdx.y),
+                type_convert<int>(blockIdx.z),
+                dq_acc_range_in_bytes,
+                k_dk_range_in_bytes,
+                v_dv_range_in_bytes,
+                do_range_in_bytes);
+        }
+#endif
 
         // prepare k and v_t in smem
         constexpr int k_reg_num = kN0 * kQKHeaddimBytes / (kBlockSize * sizeof(float4));
@@ -923,6 +937,18 @@ struct FmhaBwdDQDKDVKernel
         index_t i_total_loops = 0;
         // index_t seqlen_q_step = seqlen_q_start;
         const auto num_total_loop = integer_divide_ceil(seqlen_q_end - seqlen_q_start, kM0);
+
+#if 0
+        if(threadIdx.x == 0)
+        {
+            printf("block=[%d,%d,%d], num_total_loop=%d, dq_acc_range_in_bytes=%d\n",
+                type_convert<int>(blockIdx.x),
+                type_convert<int>(blockIdx.y),
+                type_convert<int>(blockIdx.z),
+                num_total_loop,
+                dq_acc_range_in_bytes);
+        }
+#endif
 
         // loading offset
         constexpr int q_do_reg_rows = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
@@ -1534,6 +1560,8 @@ struct FmhaBwdDQDKDVKernel
         constexpr int dv_dk_acc_vec_size = kVHeaddim / (kGemm1Gemm3rn * kGemm1Gemm3WarpN);
         const int& stride_v_seq = kargs.stride_v;
         int dv_hbm_offset = (n_id * dv_dk_acc_vec_size + k0_id * stride_v_seq * 4) * sizeof(VDataType);
+        const int dv_cta_offset = i_n0 * stride_v_seq * sizeof(VDataType);
+        const int dk_cta_offset = i_n0 * kargs.stride_k * sizeof(KDataType);
 
         // const int dv_hbm_reg_offset = stride_v_seq;
         // const int dv_hbm_a_group_offset = stride_v_seq * 8;
@@ -1543,8 +1571,6 @@ struct FmhaBwdDQDKDVKernel
         const int reg_offset_gemm1_gemm3 = stride_v_seq * sizeof(VDataType);
         const int group_offset_gemm1_gemm3 = stride_v_seq * (kGemm1Gemm3WarpM / kGemm1Gemm3AccNum) * 4 * sizeof(VDataType);
 
-        
-        dv_ptr += i_n0 * kargs.stride_k;
 #pragma unroll
         for (int i_dv = 0; i_dv < (kGemm1Gemm3AccNum / 4); i_dv++)
         {
@@ -1571,28 +1597,28 @@ struct FmhaBwdDQDKDVKernel
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dv_pack),
                                                     dv_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 0,
+                                                    dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 0,
                                                     0);
                 dv_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 1]), m1);
                 dv_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[3][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[2][i_dv * 4 + 1]), m1);
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dv_pack),
                                                     dv_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 1,
+                                                    dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 1,
                                                     0);
                 dv_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 2]), m1);
                 dv_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[3][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[2][i_dv * 4 + 2]), m1);
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dv_pack),
                                                     dv_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2,
+                                                    dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2,
                                                     0);
                 dv_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 3]), m1);
                 dv_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[3][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[2][i_dv * 4 + 3]), m1);
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dv_pack),
                                                     dv_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3,
+                                                    dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3,
                                                     0);
 
             }
@@ -1605,7 +1631,6 @@ struct FmhaBwdDQDKDVKernel
             dk_acc[i] *= kargs.raw_scale;
         }
         
-        dk_ptr += i_n0 * kargs.stride_k;
 #pragma unroll
         for (int i_dk = 0; i_dk < (kGemm1Gemm3AccNum / 4); i_dk++)
         {
@@ -1632,28 +1657,28 @@ struct FmhaBwdDQDKDVKernel
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dk_pack),
                                                     dk_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 0,
+                                                    dk_cta_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 0,
                                                     0);
                 dk_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 1]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 1]), m1);
                 dk_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[3][i_dk * 4 + 1]), bit_cast<uint32_t>(dk_acc[2][i_dk * 4 + 1]), m1);
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dk_pack),
                                                     dk_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 1,
+                                                    dk_cta_offset +group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 1,
                                                     0);
                 dk_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 2]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 2]), m1);
                 dk_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[3][i_dk * 4 + 2]), bit_cast<uint32_t>(dk_acc[2][i_dk * 4 + 2]), m1);
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dk_pack),
                                                     dk_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 2,
+                                                    dk_cta_offset +group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 2,
                                                     0);
                 dk_pack.x = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 3]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 3]), m1);
                 dk_pack.y = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[3][i_dk * 4 + 3]), bit_cast<uint32_t>(dk_acc[2][i_dk * 4 + 3]), m1);
                 llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dk_pack),
                                                     dk_resource,
                                                     dv_hbm_offset,
-                                                    group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 3,
+                                                    dk_cta_offset +group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 3,
                                                     0);
             }
         }
