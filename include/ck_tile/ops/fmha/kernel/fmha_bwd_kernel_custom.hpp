@@ -812,7 +812,7 @@ struct FmhaBwdDQDKDVKernel
         int32x4_t d_resource = make_wave_buffer_resource(d_ptr, d_range_in_bytes);
         bool lse_d_exec_mask = threadIdx.x < kM0;
 
-#if 1
+#if 0
         if(threadIdx.x == 0)
         {
             printf("block=[%d,%d,%d], dq_acc_range_in_bytes=%d, k_dk_range_in_bytes=%d, v_dv_range_in_bytes=%d, do_range_in_bytes=%d\n",
@@ -2581,36 +2581,29 @@ struct FmhaBwdConvertQGradKernel
             const AccDataType* dq_acc_ptr =
                 reinterpret_cast<const AccDataType*>(kargs.dq_acc_ptr) +
                 static_cast<long_index_t>(i_nhead) * (kargs.nhead_stride_dq) + batch_offset_dq;
+            
+            const int dq_acc_range_in_bytes = kargs.seqlen_q * kargs.stride_dq * sizeof(AccDataType);
+            const int dq_range_in_bytes = kargs.seqlen_q * kargs.stride_dq * sizeof(QGradDataType);
+            int32x4_t dq_acc_resource = make_wave_buffer_resource(dq_acc_ptr, dq_acc_range_in_bytes);
+            int32x4_t dq_resource = make_wave_buffer_resource(dq_ptr, dq_range_in_bytes);
 
-            dq_ptr += kQKHeaddim * i_m0;
-            dq_acc_ptr += kQKHeaddim * i_m0;
             constexpr int32_t m1 = 0x07060302;
-            int reg_offset = threadIdx.x * 4;
-            int reg_offset_acc = reg_offset;
-            // int num_head_q = kargs.stride_dq / kargs.hdim_q;
-
-            // const int convert_dq_range = num_head_q * kargs.seqlen_q;
-
-            char* dq_ptr_tmp;
+            int dq_acc_thread_offset = threadIdx.x * sizeof(float4);
+            int dq_thread_offset = threadIdx.x * sizeof(float2);
+            int dq_acc_wave_offset = kQKHeaddim * i_m0 * sizeof(AccDataType);
+            int dq_wave_offset = kQKHeaddim * i_m0 * sizeof(QGradDataType);
 
             constexpr int dq_reg_num = kM0 * kQKHeaddim * sizeof(AccDataType) / (kBlockSize * sizeof(float4));
-            constexpr int dq_reg_offset = (kBlockSize * sizeof(float4)) / sizeof(AccDataType);
+            constexpr int dq_acc_reg_offset = (kBlockSize * sizeof(float4));
+            constexpr int dq_reg_offset = (kBlockSize * sizeof(float2));
             float4 dq_acc_reg[dq_reg_num];
             float2 dq_reg[dq_reg_num];
-
-#if 0
-            if(blockIdx.x == 1)
-            {
-                printf("im0=%d, threadIdx.x=%d, reg_offset=%d, dq_reg_offset=%d\n",
-                    i_m0, type_convert<int>(threadIdx.x), reg_offset, dq_reg_offset);
-            }
-#endif
 
 #pragma unroll
             for(int i = 0; i < dq_reg_num; i++)
             {
-                dq_acc_reg[i] = *reinterpret_cast<const float4*>(dq_acc_ptr + reg_offset_acc);
-                dq_acc_ptr += dq_reg_offset;
+                dq_acc_reg[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(dq_acc_resource, dq_acc_thread_offset, dq_acc_wave_offset, 0));
+                dq_acc_wave_offset += dq_acc_reg_offset;
             }
 
 #pragma unroll
@@ -2623,9 +2616,8 @@ struct FmhaBwdConvertQGradKernel
 #pragma unroll
             for(int i = 0; i < dq_reg_num; i++)
             {
-                dq_ptr_tmp = reinterpret_cast<char*>(dq_ptr + reg_offset);
-                *reinterpret_cast<float2*>(dq_ptr_tmp) = dq_reg[i];
-                dq_ptr += dq_reg_offset;
+                llvm_amdgcn_raw_buffer_store_fp32x2(bit_cast<fp32x2_t>(dq_reg[i]), dq_resource, dq_thread_offset, dq_wave_offset, 0);
+                dq_wave_offset += dq_reg_offset;
             }
 #if 0
             if(threadIdx.x == 0)
