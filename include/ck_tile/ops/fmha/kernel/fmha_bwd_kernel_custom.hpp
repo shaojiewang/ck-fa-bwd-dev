@@ -1575,18 +1575,31 @@ struct FmhaBwdDQDKDVKernel
         {
             if constexpr(dv_acc_num == 2)
             {
-                uint32_t dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4]), m1);
-                char* dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv);
-                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+                uint32_t dv_pack;
+                dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4]), m1);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dv_pack),
+                                                  dv_resource,
+                                                  dv_hbm_offset,
+                                                  dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 0,
+                                                  0);
                 dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 1]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 1]), m1);
-                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3);
-                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dv_pack),
+                                                  dv_resource,
+                                                  dv_hbm_offset,
+                                                  dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 1,
+                                                  0);
                 dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 2]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 2]), m1);
-                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2);
-                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dv_pack),
+                                                  dv_resource,
+                                                  dv_hbm_offset,
+                                                  dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 2,
+                                                  0);
                 dv_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dv_acc[1][i_dv * 4 + 3]), bit_cast<uint32_t>(dv_acc[0][i_dv * 4 + 3]), m1);
-                dv_ptr_tmp = reinterpret_cast<char*>(dv_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3);
-                *reinterpret_cast<float*>(dv_ptr_tmp) = bit_cast<float>(dv_pack);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dv_pack),
+                                                  dv_resource,
+                                                  dv_hbm_offset,
+                                                  dv_cta_offset + group_offset_gemm1_gemm3 * i_dv + reg_offset_gemm1_gemm3 * 3,
+                                                  0);
             }
             else if constexpr(dv_acc_num == 4)
             {
@@ -1635,18 +1648,31 @@ struct FmhaBwdDQDKDVKernel
         {
             if constexpr(dk_acc_num == 2)
             {
-                uint32_t dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4]), m1);
-                char* dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk);
-                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+                uint32_t dk_pack;
+                dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4]), m1);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dk_pack),
+                                                  dk_resource,
+                                                  dv_hbm_offset,
+                                                  dk_cta_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 0,
+                                                  0);
                 dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 1]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 1]), m1);
-                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3);
-                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dk_pack),
+                                                  dk_resource,
+                                                  dv_hbm_offset,
+                                                  dk_cta_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 1,
+                                                  0);
                 dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 2]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 2]), m1);
-                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 2);
-                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dk_pack),
+                                                  dk_resource,
+                                                  dv_hbm_offset,
+                                                  dk_cta_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 2,
+                                                  0);
                 dk_pack = __builtin_amdgcn_perm(bit_cast<uint32_t>(dk_acc[1][i_dk * 4 + 3]), bit_cast<uint32_t>(dk_acc[0][i_dk * 4 + 3]), m1);
-                dk_ptr_tmp = reinterpret_cast<char*>(dk_ptr + dv_hbm_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 3);
-                *reinterpret_cast<float*>(dk_ptr_tmp) = bit_cast<float>(dk_pack);
+                llvm_amdgcn_raw_buffer_store_fp32(bit_cast<float>(dk_pack),
+                                                  dk_resource,
+                                                  dv_hbm_offset,
+                                                  dk_cta_offset + group_offset_gemm1_gemm3 * i_dk + reg_offset_gemm1_gemm3 * 3,
+                                                  0);
             }
             else if constexpr(dk_acc_num == 4)
             {
