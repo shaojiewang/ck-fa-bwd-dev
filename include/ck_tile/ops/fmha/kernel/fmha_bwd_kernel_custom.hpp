@@ -837,6 +837,28 @@ struct FmhaBwdDQDKDVKernel
         int k_wave_offset = i_n0 * kargs.stride_k * sizeof(KDataType);
         const int kv_reg_offset = kargs.stride_k * k_reg_row  * sizeof(KDataType);
 
+        constexpr int q_do_padding = sizeof(float4);
+
+        // k do smem offset
+        constexpr int kt_reg_gemm0_vt_reg_gemm2_num = kGemm0Gemm2rm * kQKHeaddim * kN0 * sizeof(KDataType) / (kBlockSize * sizeof(_BF16x8_t));
+        _BF16x8_t kt_reg_to_gemm0[kt_reg_gemm0_vt_reg_gemm2_num];
+        int wave_id = threadIdx.x / 64;
+        int wave_lane_id = threadIdx.x % 64;
+        int k0_id = wave_lane_id / kGemm0Gemm2Gemm4WarpM;
+        int n_id = wave_lane_id % kGemm0Gemm2Gemm4WarpM;
+        int n_wave_repeat_id = wave_id % kGemm0Gemm2rn;
+        int k_smem_gemm0_offset = n_wave_repeat_id * kGemm0Gemm2Gemm4WarpN * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + n_id * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + k0_id * 16;
+        constexpr int k_smem_read_reg_offset = kGemm0Gemm2Gemm4WarpK * sizeof(KDataType);
+
+        // loading offset
+        constexpr int q_do_reg_rows = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
+        int q_do_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * kv_vec_global + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_q;
+        q_do_load_offset *= sizeof(QDataType);
+        const int q_do_load_reg_offset = kargs.stride_q * q_do_reg_rows * sizeof(QDataType);
+        int q_do_load_wave_offset = 0;
+
+        constexpr int st_acc_gemmk_offset = 4;
+        
 #pragma unroll
         for(int i_k_reg = 0; i_k_reg < k_reg_num; i_k_reg++)
         {
@@ -855,9 +877,33 @@ struct FmhaBwdDQDKDVKernel
             v_wave_offset += kv_reg_offset;
         }
 
+        // prefetch
+        constexpr int q_do_global_num = kQKHeaddim * kM0 * sizeof(KDataType) / (kBlockSize * sizeof(float4));
+        float4 q_reg[q_do_global_num];
+        float4 do_reg[q_do_global_num];
+
+        constexpr int gemm4_groups = 64 / kGemm0Gemm2Gemm4WarpM;
+        constexpr int lse_d_reg_offset = 4 * gemm4_groups * sizeof(LSEDataType);
+        int lse_d_hbm_offset = threadIdx.x * sizeof(LSEDataType);
+        int lse_d_lds_write_offset = threadIdx.x * sizeof(LSEDataType);
+        int lse_d_lds_read_offset = k0_id * 4 * sizeof(LSEDataType);
+        int lse_d_wave_offset = 0;
+
+#pragma unroll
+        for(int i = 0; i < q_do_global_num; i++)
+        {
+            q_reg[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(q_resource, q_do_load_offset, q_do_load_wave_offset, 0));
+            do_reg[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(do_resource, q_do_load_offset, q_do_load_wave_offset, 0));
+            q_do_load_wave_offset += q_do_load_reg_offset;
+        }
+
+        float lse_reg = 0, d_reg = 0;
+        lse_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(lse_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
+        d_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(d_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
+        lse_d_wave_offset += kM0 * sizeof(LSEDataType);
+
         char* k_smem = smem_ptr;
         int kvqdo_smem_offset = threadIdx.x * sizeof(float4);
-        constexpr int q_do_padding = sizeof(float4);
         int kvqdo_smem_offset_padding = kvqdo_smem_offset / kN0 * q_do_padding;
         kvqdo_smem_offset += kvqdo_smem_offset_padding;
         constexpr int kv_smem_reg_offset = k_reg_row * (kQKHeaddim * sizeof(KDataType) + q_do_padding);
@@ -869,16 +915,6 @@ struct FmhaBwdDQDKDVKernel
         }
        
         __syncthreads();
-
-        constexpr int kt_reg_gemm0_vt_reg_gemm2_num = kGemm0Gemm2rm * kQKHeaddim * kN0 * sizeof(KDataType) / (kBlockSize * sizeof(_BF16x8_t));
-        _BF16x8_t kt_reg_to_gemm0[kt_reg_gemm0_vt_reg_gemm2_num];
-        int wave_id = threadIdx.x / 64;
-        int wave_lane_id = threadIdx.x % 64;
-        int k0_id = wave_lane_id / kGemm0Gemm2Gemm4WarpM;
-        int n_id = wave_lane_id % kGemm0Gemm2Gemm4WarpM;
-        int n_wave_repeat_id = wave_id % kGemm0Gemm2rn;
-        int k_smem_gemm0_offset = n_wave_repeat_id * kGemm0Gemm2Gemm4WarpN * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + n_id * (kQKHeaddim * sizeof(KDataType) + q_do_padding) + k0_id * 16;
-        constexpr int k_smem_read_reg_offset = kGemm0Gemm2Gemm4WarpK * sizeof(KDataType);
 
 #pragma unroll
         for(int i_kt_reg_gemm0 = 0; i_kt_reg_gemm0 < kt_reg_gemm0_vt_reg_gemm2_num; i_kt_reg_gemm0++)
@@ -950,15 +986,6 @@ struct FmhaBwdDQDKDVKernel
         }
 #endif
 
-        // loading offset
-        constexpr int q_do_reg_rows = kBlockSize * sizeof(float4) / (kQKHeaddim * sizeof(KDataType));
-        int q_do_load_offset = (threadIdx.x & num_threads_per_hd_global_load_minus_1) * kv_vec_global + (threadIdx.x / num_threads_per_hd_global_load) * kargs.stride_q;
-        q_do_load_offset *= sizeof(QDataType);
-        const int q_do_load_reg_offset = kargs.stride_q * q_do_reg_rows * sizeof(QDataType);
-        int q_do_load_wave_offset = 0;
-
-        constexpr int st_acc_gemmk_offset = 4;
-        
         // hbm store offset
 #if 1 //DQ_ATOMICADD
         int dq_acc_offset = n_id + k0_id * 4 * kargs.stride_q;
@@ -1003,16 +1030,6 @@ struct FmhaBwdDQDKDVKernel
 #endif
 
         // lse and d hbm offset and lds write read offset
-        // constexpr int lse_d_step_offset = 64 * sizeof(float);
-        constexpr int gemm4_groups = 64 / kGemm0Gemm2Gemm4WarpM;
-        constexpr int lse_d_reg_offset = 4 * gemm4_groups * sizeof(LSEDataType);
-        int lse_d_hbm_offset = threadIdx.x * sizeof(LSEDataType);
-        int lse_d_lds_write_offset = threadIdx.x * sizeof(LSEDataType);
-        int lse_d_lds_read_offset = k0_id * 4 * sizeof(LSEDataType);
-        // const float* lse_raw = lse_ptr + seqlen_q_start;
-        // const float* d_raw = d_ptr + seqlen_q_start;
-        int lse_d_wave_offset = 0;
-
         auto scale = kargs.scale;
 
         // acc clear
@@ -1031,24 +1048,6 @@ struct FmhaBwdDQDKDVKernel
         {
             dk_acc[i] = {0};
         }
-
-        constexpr int q_do_global_num = kQKHeaddim * kM0 * sizeof(KDataType) / (kBlockSize * sizeof(float4));
-        float4 q_reg[q_do_global_num];
-        float4 do_reg[q_do_global_num];
-
-        // prefetch
-#pragma unroll
-        for(int i = 0; i < q_do_global_num; i++)
-        {
-            q_reg[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(q_resource, q_do_load_offset, q_do_load_wave_offset, 0));
-            do_reg[i] = bit_cast<float4>(llvm_amdgcn_raw_buffer_load_fp32x4(do_resource, q_do_load_offset, q_do_load_wave_offset, 0));
-            q_do_load_wave_offset += q_do_load_reg_offset;
-        }
-
-        float lse_reg = 0, d_reg = 0;
-        lse_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(lse_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
-        d_reg = lse_d_exec_mask ? llvm_amdgcn_raw_buffer_load_fp32(d_resource, lse_d_hbm_offset, lse_d_wave_offset, 0): 0;
-        lse_d_wave_offset += kM0 * sizeof(LSEDataType);
 
         // reg definitions
         constexpr int st_acc_num = kM0 * kN0 * sizeof(AccDataType) / (kBlockSize * sizeof(CVecType));
