@@ -27,7 +27,7 @@
 #define REMOVE_Q_DO_LDS_WRITE 0
 #define REMOVE_GEMM0_LDS_READ 0
 #define REMOVE_SOFTMAX 0
-#define REMOVE_GEMM1_LDS_READ 0
+#define REMOVE_GEMM1_LDS_READ 1
 #define REMOVE_GEMM2_LDS_READ 0
 #define REMOVE_DS 0
 #define REMOVE_GEMM3_LDS_READ 0
@@ -1488,14 +1488,12 @@ struct FmhaBwdDQDKDVKernel
                 for(int i_dq_vec = 0; i_dq_vec < (kGemm0Gemm2Gemm4AccNum / 4); i_dq_vec++)
                 {
 #if REMOVE_ATOMICADD
-                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 0] * kargs.raw_scale;
-                    dq_acc_ptr_tmp += kargs.stride_q;
-                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 1] * kargs.raw_scale;
-                    dq_acc_ptr_tmp += kargs.stride_q;
-                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 2] * kargs.raw_scale;
-                    dq_acc_ptr_tmp += kargs.stride_q;
-                    *(dq_acc_ptr_tmp + dq_acc_offset) = st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 3] * kargs.raw_scale;
-                    dq_acc_ptr_tmp += (kGemm4GroupM - 3) * kargs.stride_q;
+                    llvm_amdgcn_raw_buffer_store_fp32(st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 0] * kargs.raw_scale,
+                                          		      dq_acc_resource,
+                                                      dq_acc_offset,
+                                                      dq_acc_wave_offset,
+                                                      0);
+                    dq_acc_wave_offset += stride_dq_acc_in_bytes;
 #else
                     llvm_amdgcn_raw_buffer_atomic_add_fp32(st_acc[st_acc_num - dq_acc_num + i_dq_acc][i_dq_vec * 4 + 0] * kargs.raw_scale,
                                                            dq_acc_resource,
